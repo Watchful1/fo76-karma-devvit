@@ -1,0 +1,153 @@
+{
+  "$schema": "https://developers.reddit.com/schema/config-file.v1.json",
+  "name": "fo76-karma-dev",
+  "server": {
+    "dir": "dist/server",
+    "entry": "index.cjs"
+  },
+  "triggers": {
+    "onCommentCreate": "/internal/triggers/on-comment-create",
+    "onModAction": "/internal/triggers/on-mod-action"
+  },
+  "scheduler": {
+    "tasks": {
+      "import-hop": {
+        "endpoint": "/internal/scheduler/import-hop"
+      }
+    }
+  },
+  "menu": {
+    "items": [
+      {
+        "label": "Karma profile",
+        "description": "The karma profile of this post's or comment's author.",
+        "location": ["post", "comment"],
+        "forUserType": "user",
+        "endpoint": "/internal/menu/profile"
+      },
+      {
+        "label": "Karma history",
+        "description": "The rewards this post's or comment's author gave and received.",
+        "location": ["post", "comment"],
+        "forUserType": "moderator",
+        "endpoint": "/internal/menu/history"
+      },
+      {
+        "label": "Edit karma profile",
+        "description": "Edit the karma and gamertags of this post's or comment's author.",
+        "location": ["post", "comment"],
+        "forUserType": "moderator",
+        "endpoint": "/internal/menu/profile-edit"
+      },
+      {
+        "label": "Re-run karma command",
+        "description": "Run this comment's karma command again, for example after the bot missed it.",
+        "location": "comment",
+        "forUserType": "moderator",
+        "endpoint": "/internal/menu/rerun"
+      },
+      {
+        "label": "Karma lookup",
+        "description": "Open a user's karma profile, history or edit form by username.",
+        "location": "subreddit",
+        "forUserType": "moderator",
+        "endpoint": "/internal/menu/lookup"
+      },
+      {
+        "label": "Export karma rewards",
+        "description": "Write every reward since a date to a wiki page.",
+        "location": "subreddit",
+        "forUserType": "moderator",
+        "endpoint": "/internal/menu/export"
+      },
+      {
+        "label": "Import karma data",
+        "description": "Load the bundled snapshot, or a delta from a wiki page. Only while the bot is disabled.",
+        "location": "subreddit",
+        "forUserType": "moderator",
+        "endpoint": "/internal/menu/import"
+      }
+    ]
+  },
+  "forms": {
+    "profileView": "/internal/forms/profile-view",
+    "historyView": "/internal/forms/history-view",
+    "profileEdit": "/internal/forms/profile-edit",
+    "lookup": "/internal/forms/lookup",
+    "exportSince": "/internal/forms/export-since",
+    "importData": "/internal/forms/import-data"
+  },
+  "settings": {
+    "subreddit": {
+      "enabled": {
+        "type": "boolean",
+        "label": "Enabled: answer karma and close commands. Leave off until the old bot is stopped.",
+        "defaultValue": false
+      },
+      "dailyCap": {
+        "type": "number",
+        "label": "Karma a user may give per day (UTC)",
+        "defaultValue": 10
+      },
+      "tradingFlairs": {
+        "type": "string",
+        "label": "Post flair texts of trading posts, separated by commas",
+        "defaultValue": "XBOX, PlayStation, PC"
+      },
+      "templateModsAndCouriers": {
+        "type": "string",
+        "label": "User flair template id: moderators and couriers",
+        "defaultValue": "51524056-4a4d-11eb-814b-0e7b734c1fd5"
+      },
+      "templateTier0": {
+        "type": "string",
+        "label": "User flair template id: karma 0 to 49",
+        "defaultValue": "3c680234-4a4d-11eb-8124-0edd2b620987"
+      },
+      "templateTier50": {
+        "type": "string",
+        "label": "User flair template id: karma 50 to 99",
+        "defaultValue": "2624bc6a-4a4d-11eb-8b7c-0e6968d78889"
+      },
+      "templateTier100": {
+        "type": "string",
+        "label": "User flair template id: karma 100 and up",
+        "defaultValue": "0467e0de-4a4d-11eb-9453-0e4e6fcf2865"
+      },
+      "templateTradeClosed": {
+        "type": "string",
+        "label": "Post flair template id: Trade Closed",
+        "defaultValue": "1e0c3870-a456-11ea-aa7a-0ee73ab9d31f"
+      },
+      "courierPage": {
+        "type": "string",
+        "label": "Wiki page with the courier list (YAML, a `couriers:` list)",
+        "defaultValue": "custom_bot_config/courier_list"
+      },
+      "discordWebhookUrl": {
+        "type": "string",
+        "label": "Discord webhook URL for alerts (leave empty to disable)"
+      },
+      "disclaimerUrl": {
+        "type": "string",
+        "label": "Link in the footer of every reply",
+        "defaultValue": "https://www.reddit.com/user/Vault-TecTradingCo/comments/lkllre/disclaimer_for_rfallout76marketplace/"
+      }
+    }
+  },
+  "dev": {
+    "subreddit": "fo76_karma_dev_dev"
+  },
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite build --watch"
+  },
+  "permissions": {
+    "reddit": true,
+    "redis": true,
+    "http": {
+      "enable": true,
+      "domains": ["discord.com"]
+    }
+  }
+}
