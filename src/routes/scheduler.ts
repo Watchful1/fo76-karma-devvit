@@ -18,8 +18,15 @@ import type { ImportStatus } from '../server/ui';
 export const scheduler_ = new Hono();
 
 export const IMPORT_JOB = 'import-hop';
-/** Rows per hop: each reward row can cost two sorted-set writes, so hops stay well under the 30-second limit. */
+/** Rows per batch: each reward row can cost two sorted-set writes, so a batch takes a few seconds at most. */
 export const IMPORT_HOP_ROWS = 300;
+/** How long one hop keeps loading batches before it hands over to the next, well inside a request's 30 seconds. */
+const HOP_BUDGET_MS = 15_000;
+/**
+ * The pause before the next hop. The platform limits how fast new jobs are
+ * scheduled ("limit exceeded: new action rate" after 60 hops in 17 seconds).
+ */
+const HOP_GAP_MS = 2_000;
 
 const SOURCE = 'import:source';
 const STATUS = 'import:status';
@@ -52,10 +59,10 @@ async function setStatus(
   await db.setMeta(STATUS, JSON.stringify({ ...status, atMs: Date.now() }));
 }
 
-async function scheduleHop(run: string): Promise<void> {
+async function scheduleHop(run: string, delayMs = 0): Promise<void> {
   await scheduler.runJob({
     name: IMPORT_JOB,
-    runAt: new Date(),
+    runAt: new Date(Date.now() + delayMs),
     data: { run },
   });
 }
@@ -112,7 +119,11 @@ scheduler_.post(`/${IMPORT_JOB}`, async (c) => {
       return c.json({}, 200);
     }
 
-    const progress = await importHop(snapshot, db, IMPORT_HOP_ROWS);
+    const started = Date.now();
+    let progress = await importHop(snapshot, db, IMPORT_HOP_ROWS);
+    while (!progress.done && Date.now() - started < HOP_BUDGET_MS) {
+      progress = await importHop(snapshot, db, IMPORT_HOP_ROWS);
+    }
     console.log(
       `Import from ${source}: ${progress.rows}/${progress.total}${progress.done ? ', done' : ''}`
     );
@@ -123,7 +134,7 @@ scheduler_.post(`/${IMPORT_JOB}`, async (c) => {
         rows: progress.rows,
         total,
       });
-      await scheduleHop(run);
+      await scheduleHop(run, HOP_GAP_MS);
       return c.json({}, 200);
     }
     await setTodaysCounts(db);
