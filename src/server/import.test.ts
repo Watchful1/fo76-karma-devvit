@@ -318,6 +318,13 @@ test('parsePastedSnapshot reads JSON inside a code fence, with or without a lang
   );
 });
 
+test('parsePastedSnapshot drops the markdown escapes of the reddit.com wiki editor', () => {
+  const json = JSON.stringify(PASTED);
+  const escaped = json.replace(/[[\]_]/g, (char) => `\\${char}`);
+  assert.match(escaped, /^\{"newestMs":5000,"profiles":\\\[\\\["Alice"/);
+  assert.deepEqual(parsePastedSnapshot(escaped), PASTED);
+});
+
 test('parsePastedSnapshot decodes HTML entities, in quotes and inside a gamertag', () => {
   const json = JSON.stringify({
     ...PASTED,

@@ -121,30 +121,35 @@ export function parseSnapshot(json: string): Snapshot {
 /**
  * Parses a snapshot pasted on a wiki page. Reddit returns wiki text with
  * `&`, `<` and `>` as HTML entities, so those are decoded first; they never
- * change the structure of JSON. A moderator may also have wrapped the JSON in
- * a code fence, so when the text does not parse, it is tried again without one.
+ * change the structure of JSON. When the text does not parse, it is tried
+ * again without a code fence a moderator may have wrapped it in, and then
+ * without the backslashes the reddit.com wiki editor puts before markdown
+ * characters such as `[` and `_`.
  */
 export function parsePastedSnapshot(content: string): Snapshot {
   const decoded = content
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>')
     .replace(/&amp;/g, '&');
-  try {
-    return parseSnapshot(decoded);
-  } catch (error) {
-    const unwrapped = decoded
-      .trim()
-      .replace(/^```[a-z]*\s*/i, '')
-      .replace(/\s*```$/, '')
-      .replace(/&quot;/g, '"');
-    if (unwrapped === decoded) throw error;
+  const unwrapped = decoded
+    .trim()
+    .replace(/^```[a-z]*\s*/i, '')
+    .replace(/\s*```$/, '')
+    .replace(/&quot;/g, '"');
+  const unescaped = unwrapped.replace(MARKDOWN_ESCAPE, '$1');
+  let firstError: unknown;
+  for (const text of new Set([decoded, unwrapped, unescaped])) {
     try {
-      return parseSnapshot(unwrapped);
-    } catch {
-      throw error;
+      return parseSnapshot(text);
+    } catch (error) {
+      firstError ??= error;
     }
   }
+  throw firstError;
 }
+
+/** A markdown backslash escape: a backslash before ASCII punctuation. */
+const MARKDOWN_ESCAPE = /\\([!-/:-@[-`{-~])/g;
 
 function gamertagFromRow([platform, username, userId]: GamertagRow): Gamertag {
   if (!PLATFORMS.includes(platform as Platform))

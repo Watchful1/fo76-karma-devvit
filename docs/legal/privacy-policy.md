@@ -18,9 +18,9 @@ The app stores no Reddit account ids, email addresses or other personal data.
 
 ## Where it is stored and who sees it
 
-The data lives in the storage Reddit provides to the app for this subreddit, and nowhere else. Anyone on Reddit can open a user's karma profile (username, karma and gamertags) from a post or comment, as they could with Pip-Boy 2000, and the karma total is shown in your user flair. Reward history and profile editing are available to the subreddit's moderators only. Moderators can export a list of rewards (usernames, posts, comments and times) to a wiki page that only moderators can see.
+The data lives in the storage Reddit provides to the app for this subreddit, and nowhere else. Anyone on Reddit can open a user's karma profile (username, karma and gamertags) from a post or comment, as they could with Pip-Boy 2000, and the karma total is shown in your user flair. Only the subreddit's moderators can edit a profile. Moderators can export a list of rewards (usernames, posts, comments and times) to a wiki page that only moderators can see.
 
-When a moderator has set up alerts, the app sends short messages to the moderator team's Discord channel about errors and about users reaching the daily karma limit. Those messages contain usernames and links to Reddit comments, and nothing else.
+When a moderator has set up alerts, the app sends short messages to the moderator team's Discord channel about errors. Those messages contain usernames and links to Reddit comments, and nothing else.
 
 ## How long it is kept
 

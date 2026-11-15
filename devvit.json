@@ -26,13 +26,6 @@
         "endpoint": "/internal/menu/profile"
       },
       {
-        "label": "Karma history",
-        "description": "The rewards this post's or comment's author gave and received.",
-        "location": ["post", "comment"],
-        "forUserType": "moderator",
-        "endpoint": "/internal/menu/history"
-      },
-      {
         "label": "Edit karma profile",
         "description": "Edit the karma and gamertags of this post's or comment's author.",
         "location": ["post", "comment"],
@@ -48,7 +41,7 @@
       },
       {
         "label": "Karma lookup",
-        "description": "Open a user's karma profile, history or edit form by username.",
+        "description": "Open a user's karma profile or edit form by username.",
         "location": "subreddit",
         "forUserType": "moderator",
         "endpoint": "/internal/menu/lookup"
@@ -71,7 +64,6 @@
   },
   "forms": {
     "profileView": "/internal/forms/profile-view",
-    "historyView": "/internal/forms/history-view",
     "profileEdit": "/internal/forms/profile-edit",
     "lookup": "/internal/forms/lookup",
     "exportSince": "/internal/forms/export-since",

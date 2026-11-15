@@ -1,21 +1,21 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import type { HistoryEntry, ImportedReward, Profile } from './types';
+import type { ImportedReward, Profile } from './types';
 import {
   cleanUsername,
   exportForm,
   exportText,
-  historyForm,
-  historyLine,
   IMPORT_STALLED_MS,
   importForm,
   importStatusText,
   KARMA_LIMIT,
   lookupForm,
   profileForm,
+  profileText,
   profileFromForm,
   selected,
+  wikiPageUrl,
   type ImportStatus,
 } from './ui';
 
@@ -121,23 +121,25 @@ test('the editable form leaves only the username and the karma-at-open disabled'
   assert.deepEqual(disabled, ['username', 'openedKarma']);
 });
 
-test('the read-only form shows karma as strings and has no editing fields', () => {
+test('the read-only form shows the profile as text, with no fields', () => {
   const form = profileForm(fullProfile, false);
-  const byName = fieldMap(form);
-  assert.equal(byName.get('username')?.defaultValue, 'Bob');
-  assert.equal(byName.get('karma')?.type, 'string');
-  assert.equal(byName.get('karma')?.defaultValue, '-7');
-  assert.equal(byName.get('m76Karma')?.type, 'string');
-  assert.equal(byName.get('m76Karma')?.defaultValue, '40');
-  assert.equal(byName.get('XBOX')?.defaultValue, 'bob_x');
-  assert.equal(byName.get('PlayStation')?.defaultValue, 'bob_ps');
-  assert.equal(byName.get('PC')?.defaultValue, 'bob_pc');
-  assert.equal(byName.has('XBOXId'), false);
-  assert.equal(byName.has('PlayStationId'), false);
-  assert.equal(byName.has('PCId'), false);
-  assert.equal(byName.has('openedKarma'), false);
-  assert.equal(byName.has('deleteProfile'), false);
-  for (const field of fieldsOf(form)) assert.equal(field.disabled, true);
+  assert.equal(form.title, 'Karma profile of u/Bob');
+  assert.deepEqual(form.fields, []);
+  assert.equal(
+    form.description,
+    [
+      'r/Fallout76Marketplace karma: -7',
+      'r/Market76 karma: 40',
+      'XBOX gamertag: bob_x',
+      'PlayStation gamertag: bob_ps',
+      'PC gamertag: bob_pc',
+    ].join('\n')
+  );
+});
+
+test('the read-only text says none for a platform with no gamertag', () => {
+  assert.match(profileText(profile), /XBOX gamertag: none/);
+  assert.match(profileText(profile), /PC gamertag: bobby/);
 });
 
 test('the editable form has number fields for karma and enabled gamertags', () => {
@@ -379,137 +381,6 @@ test('openedKarma is read from its string, and is undefined when absent or junk'
   );
 });
 
-// ------------------------------------------------------------ historyForm
-
-const rewardEntry = (i: number): HistoryEntry => ({
-  kind: 'reward',
-  atMs: AT + i * 60_000,
-  commentId: `t1_c${i}`,
-  postId: 't3_p1',
-  giver: 'Alice',
-  receiver: 'Bob',
-  sign: 1,
-});
-
-test('historyForm describes an empty first page, an empty later page and a full page', () => {
-  assert.equal(historyForm('Bob', [], 0, 50).description, 'No entries.');
-  assert.equal(historyForm('Bob', [], 50, 50).description, 'No older entries.');
-  const entries = [rewardEntry(1), rewardEntry(2), rewardEntry(3)];
-  assert.equal(
-    historyForm('Bob', entries, 0, 3).description,
-    'Entries 1 to 3, newest first.'
-  );
-  assert.equal(
-    historyForm('Bob', entries, 50, 3).description,
-    'Entries 51 to 53, newest first.'
-  );
-});
-
-test('the offset field defaults to the offset plus the entries shown', () => {
-  const entries = [rewardEntry(1), rewardEntry(2)];
-  const offset = fieldMap(historyForm('Bob', entries, 50, 2)).get('offset');
-  assert.equal(offset?.type, 'number');
-  assert.equal(offset?.defaultValue, 52);
-  assert.equal(
-    fieldMap(historyForm('Bob', [], 0, 50)).get('offset')?.defaultValue,
-    0
-  );
-});
-
-test('the offset help text differs between the last page and a full page', () => {
-  const full = fieldMap(
-    historyForm('Bob', [rewardEntry(1), rewardEntry(2)], 0, 2)
-  ).get('offset')?.helpText;
-  const last = fieldMap(historyForm('Bob', [rewardEntry(1)], 0, 2)).get(
-    'offset'
-  )?.helpText;
-  assert.ok(full && last);
-  assert.notEqual(full, last);
-  assert.match(last, /oldest/);
-  assert.match(full, /Show older/);
-});
-
-test('the entries paragraph holds one line per entry, and the username is fixed', () => {
-  const entries = [rewardEntry(1), rewardEntry(2), rewardEntry(3)];
-  const byName = fieldMap(historyForm('Bob', entries, 0, 50));
-  const lines = String(byName.get('entries')?.defaultValue).split('\n');
-  assert.equal(lines.length, 3);
-  assert.deepEqual(
-    lines,
-    entries.map((entry) => historyLine('Bob', entry))
-  );
-  assert.equal(byName.get('entries')?.type, 'paragraph');
-  assert.equal(byName.get('username')?.defaultValue, 'Bob');
-});
-
-// ------------------------------------------------------------ history lines
-
-test('a reward line names the other user, given or received', () => {
-  const entry: HistoryEntry = {
-    kind: 'reward',
-    atMs: AT,
-    commentId: 't1_c9',
-    postId: 't3_p1',
-    giver: 'Alice',
-    receiver: 'Bob',
-    sign: 1,
-  };
-  const received = historyLine('bob', entry);
-  assert.match(received, /from u\/Alice/);
-  assert.match(received, /\+1/);
-  assert.match(received, /2027-01-15 08:30/);
-  const gave = historyLine('ALICE', entry);
-  assert.match(gave, /to u\/Bob/);
-});
-
-test('reward signs are shown as +1, -1 and imported', () => {
-  const base = {
-    kind: 'reward' as const,
-    atMs: AT,
-    commentId: 'c',
-    postId: 'p',
-    giver: 'a',
-    receiver: 'b',
-  };
-  assert.match(historyLine('a', { ...base, sign: -1 }), /-1/);
-  assert.match(historyLine('a', { ...base, sign: 0 }), /±1 \(imported\)/);
-});
-
-test('a deleted partner shows as the placeholder, without u/', () => {
-  const line = historyLine('bob', {
-    kind: 'reward',
-    atMs: AT,
-    commentId: 't1_c9',
-    postId: 't3_p9',
-    giver: '[deleted-1a2b3c4d]',
-    receiver: 'bob',
-    sign: 1,
-  });
-  assert.match(line, /\+1 from \[deleted-1a2b3c4d\] {2}post p9/);
-  assert.doesNotMatch(line, /u\/\[/);
-});
-
-test('an edit line shows the old and new values, or removed', () => {
-  const edited = historyLine('bob', {
-    kind: 'edit',
-    atMs: AT,
-    moderator: 'Mod',
-    before: profile,
-    after: { ...profile, karma: 20, gamertags: [] },
-  });
-  assert.match(edited, /u\/Mod/);
-  assert.match(edited, /karma 12 → 20/);
-  assert.match(edited, /gamertags 1 → 0/);
-  const removed = historyLine('bob', {
-    kind: 'edit',
-    atMs: AT,
-    moderator: 'Mod',
-    before: profile,
-    after: undefined,
-  });
-  assert.match(removed, /karma 12 → removed/);
-});
-
 // ------------------------------------------------------------ exportText
 
 const exported = (i: number, sign: 1 | -1 | 0 = 1): ImportedReward => ({
@@ -686,7 +557,14 @@ test('lookupForm asks for a username and opens the profile by default', () => {
   assert.deepEqual(byName.get('action')?.defaultValue, ['profile']);
   assert.deepEqual(
     byName.get('action')?.options?.map((option) => option.value),
-    ['profile', 'history', 'edit']
+    ['profile', 'edit']
+  );
+});
+
+test('wikiPageUrl keeps the slashes of a nested page', () => {
+  assert.equal(
+    wikiPageUrl('fo76_karma_dev_dev', 'karma-export/20261115-0341'),
+    'https://old.reddit.com/r/fo76_karma_dev_dev/wiki/karma-export/20261115-0341'
   );
 });
 

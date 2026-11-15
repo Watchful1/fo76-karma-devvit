@@ -126,6 +126,15 @@ async function runCommand(
   return kind === 'close' ? closePost(run) : giveKarma(kind, run);
 }
 
+/** Runs one Reddit call, naming it in the error, so the log says which call failed. */
+async function step(name: string, call: () => Promise<void>): Promise<void> {
+  try {
+    await call();
+  } catch (error) {
+    throw new Error(`${name}: ${String(error)}`, { cause: error });
+  }
+}
+
 async function closePost(run: Run): Promise<Outcome> {
   const { comment, author, post, roles, ports } = run;
   const { reddit, store, config } = ports;
@@ -154,8 +163,10 @@ async function closePost(run: Run): Promise<Outcome> {
     return 'refused';
   }
 
-  await reddit.setPostFlair(post.id, config.templates.tradeClosed);
-  await reddit.lockPost(post.id);
+  await step('setting the Trade Closed flair', () =>
+    reddit.setPostFlair(post.id, config.templates.tradeClosed)
+  );
+  await step('locking the post', () => reddit.lockPost(post.id));
   if (!run.answeredBefore) {
     await reply(
       ports,

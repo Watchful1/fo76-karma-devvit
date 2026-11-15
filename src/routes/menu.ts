@@ -11,7 +11,6 @@ import { Roles } from '../server/roles';
 import { dayMs } from '../server/time';
 import {
   exportForm,
-  historyForm,
   importForm,
   importStatusText,
   lookupForm,
@@ -22,7 +21,6 @@ import { importStatus } from './scheduler';
 
 export const menu = new Hono();
 
-export const HISTORY_PAGE = 50;
 
 async function authorOf(targetId: string): Promise<string | undefined> {
   return isCommentId(targetId)
@@ -41,22 +39,6 @@ export async function profileView(
     showForm: {
       name: editable ? 'profileEdit' : 'profileView',
       form: profileForm(profile, editable),
-    },
-  };
-}
-
-export async function historyView(
-  username: string,
-  offset = 0
-): Promise<UiResponse> {
-  const entries = await store().history(username, {
-    offset,
-    limit: HISTORY_PAGE,
-  });
-  return {
-    showForm: {
-      name: 'historyView',
-      form: historyForm(username, entries, offset, HISTORY_PAGE),
     },
   };
 }
@@ -105,13 +87,6 @@ menu.post(
   '/profile',
   forEveryone(async (c) =>
     withAuthor(await targetOf(c), (username) => profileView(username, false))
-  )
-);
-
-menu.post(
-  '/history',
-  forModerators(async (c) =>
-    withAuthor(await targetOf(c), (username) => historyView(username))
   )
 );
 

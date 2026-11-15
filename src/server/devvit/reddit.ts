@@ -38,7 +38,12 @@ export const devvitReddit: RedditPort = {
       body: comment.body,
       parentId: comment.parentId,
       postId: comment.postId,
-      removed: comment.removed || comment.spam,
+      // A comment AutoModerator filtered has removed=false but a ban time, until
+      // a moderator approves it.
+      removed:
+        comment.removed ||
+        comment.spam ||
+        (comment.bannedAtUtc > 0 && !comment.approved),
       permalink: comment.permalink,
     };
   },
@@ -65,11 +70,24 @@ export const devvitReddit: RedditPort = {
   },
 
   async readWikiPage(page: string): Promise<string | undefined> {
+    // Reddit has two wikis with separate pages: the old one (v1), which old
+    // Reddit shows and which holds config/ pages, and the new one (v2), which
+    // reddit.com shows. A page a moderator made on reddit.com is only in v2.
     try {
       return (await reddit.getWikiPage(context.subredditName, page)).content;
     } catch (error) {
-      if (isMissingPage(error)) return undefined;
-      throw error;
+      if (!isMissingPage(error)) throw error;
+    }
+    try {
+      return (
+        await reddit.getWikiPage(context.subredditName, page, {
+          wikiVersion: 'v2',
+        })
+      ).content;
+    } catch (error) {
+      // The subreddit may not have the new wiki at all: the page is missing either way.
+      console.log(`Wiki page ${page} is in neither wiki: ${String(error)}`);
+      return undefined;
     }
   },
 

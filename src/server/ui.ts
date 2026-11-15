@@ -5,12 +5,7 @@
 
 import type { Form, FormField } from '@devvit/shared-types/shared/form.js';
 
-import {
-  PLATFORMS,
-  type HistoryEntry,
-  type ImportedReward,
-  type Profile,
-} from './types';
+import { PLATFORMS, type ImportedReward, type Profile } from './types';
 
 /** The largest karma a moderator can type, so a slip of the keyboard is refused. */
 export const KARMA_LIMIT = 1_000_000;
@@ -31,8 +26,27 @@ function gamertag(
 }
 
 /** The read-only profile card everyone can open, or the moderators' editable version. */
+/** The read-only profile as lines of text, for the form's description. */
+export function profileText(profile: Profile): string {
+  return [
+    `r/Fallout76Marketplace karma: ${profile.karma}`,
+    `r/Market76 karma: ${profile.m76Karma}`,
+    ...PLATFORMS.map(
+      (platform) =>
+        `${platform} gamertag: ${gamertag(profile, platform).username || 'none'}`
+    ),
+  ].join('\n');
+}
+
 export function profileForm(profile: Profile, editable: boolean): Form {
-  const ro = !editable;
+  if (!editable) {
+    return {
+      title: `Karma profile of u/${profile.redditUsername}`,
+      description: profileText(profile),
+      acceptLabel: 'Close',
+      fields: [],
+    };
+  }
   const fields: FormField[] = [
     {
       type: 'string',
@@ -41,83 +55,58 @@ export function profileForm(profile: Profile, editable: boolean): Form {
       defaultValue: profile.redditUsername,
       disabled: true,
     },
-    editable
-      ? {
-          type: 'number',
-          name: 'karma',
-          label: 'r/Fallout76Marketplace karma',
-          defaultValue: profile.karma,
-          required: true,
-        }
-      : {
-          type: 'string',
-          name: 'karma',
-          label: 'r/Fallout76Marketplace karma',
-          defaultValue: String(profile.karma),
-          disabled: true,
-        },
-    editable
-      ? {
-          type: 'number',
-          name: 'm76Karma',
-          label: 'r/Market76 karma',
-          defaultValue: profile.m76Karma,
-          required: true,
-        }
-      : {
-          type: 'string',
-          name: 'm76Karma',
-          label: 'r/Market76 karma',
-          defaultValue: String(profile.m76Karma),
-          disabled: true,
-        },
+    {
+      type: 'number',
+      name: 'karma',
+      label: 'r/Fallout76Marketplace karma',
+      defaultValue: profile.karma,
+      required: true,
+    },
+    {
+      type: 'number',
+      name: 'm76Karma',
+      label: 'r/Market76 karma',
+      defaultValue: profile.m76Karma,
+      required: true,
+    },
     ...PLATFORMS.flatMap((platform): FormField[] => {
       const tag = gamertag(profile, platform);
-      const fields: FormField[] = [
+      return [
         {
           type: 'string',
           name: platform,
           label: `${platform} gamertag`,
           defaultValue: tag.username,
-          disabled: ro,
+          disabled: false,
         },
-      ];
-      if (editable) {
-        fields.push({
+        {
           type: 'string',
           name: `${platform}Id`,
           label: `${platform} gamertag id`,
           defaultValue: tag.userId,
-        });
-      }
-      return fields;
+        },
+      ];
     }),
+    {
+      type: 'string',
+      name: 'openedKarma',
+      label: 'Karma when this form was opened',
+      helpText:
+        'A change to the karma above is applied as the difference from this, so a reward given in the meantime is kept.',
+      defaultValue: String(profile.karma),
+      disabled: true,
+    },
+    {
+      type: 'boolean',
+      name: 'deleteProfile',
+      label:
+        'Delete this profile, its history and its reward index entries (a data deletion request)',
+      defaultValue: false,
+    },
   ];
-  if (editable) {
-    fields.push(
-      {
-        type: 'string',
-        name: 'openedKarma',
-        label: 'Karma when this form was opened',
-        helpText:
-          'A change to the karma above is applied as the difference from this, so a reward given in the meantime is kept.',
-        defaultValue: String(profile.karma),
-        disabled: true,
-      },
-      {
-        type: 'boolean',
-        name: 'deleteProfile',
-        label:
-          'Delete this profile, its history and its reward index entries (a data deletion request)',
-        defaultValue: false,
-      }
-    );
-  }
   return {
-    title: editable
-      ? `Edit karma profile of u/${profile.redditUsername}`
-      : `Karma profile of u/${profile.redditUsername}`,
-    acceptLabel: editable ? 'Save' : 'Close',
+    title: `Edit karma profile of u/${profile.redditUsername}`,
+    acceptLabel: 'Save',
     fields,
   };
 }
@@ -196,72 +185,7 @@ export function signText(sign: 1 | -1 | 0): string {
 }
 
 /** `u/name`, or the bare placeholder that stands for a deleted profile. */
-function userText(name: string): string {
-  return name.startsWith('[') ? name : `u/${name}`;
-}
-
-export function historyLine(username: string, entry: HistoryEntry): string {
-  const me = username.toLowerCase();
-  switch (entry.kind) {
-    case 'reward': {
-      const gave = entry.giver.toLowerCase() === me;
-      const other = gave ? entry.receiver : entry.giver;
-      const sign = `${signText(entry.sign)}${entry.sign === 0 ? ' (imported)' : ''}`;
-      return `${day(entry.atMs)}  ${sign} ${gave ? 'to' : 'from'} ${userText(other)}  post ${entry.postId.replace('t3_', '')}  comment ${entry.commentId.replace('t1_', '')}`;
-    }
-    case 'edit':
-      return `${day(entry.atMs)}  edited by u/${entry.moderator}: karma ${entry.before.karma} → ${entry.after?.karma ?? 'removed'}, m76 ${entry.before.m76Karma} → ${entry.after?.m76Karma ?? 'removed'}, gamertags ${entry.before.gamertags.length} → ${entry.after?.gamertags.length ?? 0}`;
-  }
-}
-
-/** One page of a user's history. `offset` is how many newer entries came before it. */
-export function historyForm(
-  username: string,
-  entries: HistoryEntry[],
-  offset: number,
-  limit: number
-): Form {
-  const lines = entries.map((entry) => historyLine(username, entry));
-  const last = entries.length < limit;
-  return {
-    title: `Karma history of u/${username}`,
-    description:
-      entries.length === 0
-        ? offset > 0
-          ? 'No older entries.'
-          : 'No entries.'
-        : `Entries ${offset + 1} to ${offset + entries.length}, newest first.`,
-    acceptLabel: 'Show older',
-    cancelLabel: 'Close',
-    fields: [
-      {
-        type: 'string',
-        name: 'username',
-        label: 'Username',
-        defaultValue: username,
-        disabled: true,
-      },
-      {
-        type: 'paragraph',
-        name: 'entries',
-        label: 'Entries',
-        defaultValue: lines.join('\n'),
-        disabled: true,
-      },
-      {
-        type: 'number',
-        name: 'offset',
-        label: 'Skip this many of the newest entries',
-        defaultValue: offset + entries.length,
-        helpText: last
-          ? 'These are the oldest entries. Set this to 0 for the newest again.'
-          : 'Click "Show older" for the next page, or set this to 0 for the newest again.',
-      },
-    ],
-  };
-}
-
-export const LOOKUP_ACTIONS = ['profile', 'history', 'edit'] as const;
+export const LOOKUP_ACTIONS = ['profile', 'edit'] as const;
 export type LookupAction = (typeof LOOKUP_ACTIONS)[number];
 
 export function lookupForm(): Form {
@@ -277,7 +201,6 @@ export function lookupForm(): Form {
         defaultValue: ['profile'],
         options: [
           { label: 'Karma profile', value: 'profile' },
-          { label: 'Karma history', value: 'history' },
           { label: 'Edit karma profile', value: 'edit' },
         ],
       },
@@ -285,11 +208,17 @@ export function lookupForm(): Form {
   };
 }
 
+/** The address of a page in the old wiki, where the app writes, on old Reddit: reddit.com shows only the new wiki. */
+export function wikiPageUrl(subredditName: string, page: string): string {
+  const path = page.split('/').map(encodeURIComponent).join('/');
+  return `https://old.reddit.com/r/${encodeURIComponent(subredditName)}/wiki/${path}`;
+}
+
 export function exportForm(defaultSince: string): Form {
   return {
     title: 'Export karma rewards',
     description:
-      'Writes the rewards since the time to a wiki page named karma-export/<time>, which only moderators can see.',
+      'Writes the rewards since the time to a wiki page named karma-export/<time>, which only moderators can see, and opens it on old.reddit.com.',
     acceptLabel: 'Export',
     fields: [
       {

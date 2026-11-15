@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import type { Context } from 'hono';
+import { context } from '@devvit/web/server';
 import type { UiResponse } from '@devvit/web/shared';
 
 import { config, store } from '../server/devvit/platform';
@@ -9,9 +10,10 @@ import {
   exportText,
   profileFromForm,
   selected,
+  wikiPageUrl,
 } from '../server/ui';
 import { forEveryone, forModerators, toast } from './guard';
-import { flairNote, historyView, profileView } from './menu';
+import { flairNote, profileView } from './menu';
 import { loadSnapshot, startImport } from './scheduler';
 
 export const forms = new Hono();
@@ -39,18 +41,6 @@ const BAD_USERNAME = 'That is not a Reddit username.';
 forms.post(
   '/profile-view',
   forEveryone(async () => ({}))
-);
-
-// "Show older": the same view, further back.
-forms.post(
-  '/history-view',
-  forModerators(async (c) => {
-    const values = await valuesOf(c);
-    const username = cleanUsername(text(values, 'username'));
-    if (!username) return toast(BAD_USERNAME);
-    const offset = Math.trunc(Number(values.offset));
-    return historyView(username, offset > 0 ? offset : 0);
-  })
 );
 
 forms.post(
@@ -110,8 +100,6 @@ forms.post(
     const username = cleanUsername(text(values, 'username'));
     if (!username) return toast(BAD_USERNAME);
     switch (selected(values, 'action')) {
-      case 'history':
-        return historyView(username);
       case 'edit':
         return profileView(username, true);
       default:
@@ -136,15 +124,18 @@ forms.post(
       output.text,
       'Karma export'
     );
-    return toast(
-      `Wrote ${output.shown} rewards to the wiki page ${page}.` +
-        (output.truncated
-          ? ' There are more: the page says where to continue.'
-          : '') +
-        (restricted
-          ? ''
-          : ' The page could NOT be limited to moderators: set its permissions by hand.')
-    );
+    return {
+      ...toast(
+        `Wrote ${output.shown} rewards to the wiki page ${page}.` +
+          (output.truncated
+            ? ' There are more: the page says where to continue.'
+            : '') +
+          (restricted
+            ? ''
+            : ' The page could NOT be limited to moderators: set its permissions by hand.')
+      ),
+      navigateTo: wikiPageUrl(context.subredditName, page),
+    };
   })
 );
 
