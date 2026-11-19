@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { scheduler } from '@devvit/web/server';
 
-import { config, ports, store } from '../server/devvit/platform';
+import { config, store } from '../server/devvit/platform';
 import { devvitReddit } from '../server/devvit/reddit';
 import {
   dailyCountsFrom,
@@ -104,7 +104,6 @@ scheduler_.post(`/${IMPORT_JOB}`, async (c) => {
     return c.json({}, 200);
   }
 
-  const { alerts } = await ports();
   let total = 0;
   try {
     const snapshot = await loadSnapshot(source);
@@ -113,7 +112,7 @@ scheduler_.post(`/${IMPORT_JOB}`, async (c) => {
     if ((await config()).enabled) {
       const { rows } = await db.importProgress();
       await setStatus(db, { source, state: 'stopped', rows, total });
-      await alerts.send(
+      console.log(
         `Import from ${source} stopped at ${rows}/${total} rows because Enabled is on`
       );
       return c.json({}, 200);
@@ -139,7 +138,7 @@ scheduler_.post(`/${IMPORT_JOB}`, async (c) => {
     }
     await setTodaysCounts(db);
     await setStatus(db, { source, state: 'done', rows: progress.rows, total });
-    await alerts.send(`Import from ${source} finished: ${progress.total} rows`);
+    console.log(`Import from ${source} finished: ${progress.total} rows`);
   } catch (error) {
     console.error(`Import hop failed: ${String(error)}`);
     try {
@@ -154,9 +153,6 @@ scheduler_.post(`/${IMPORT_JOB}`, async (c) => {
     } catch (statusError) {
       console.error(`Import status not saved: ${String(statusError)}`);
     }
-    await alerts.send(
-      `Import from ${source} failed: ${String(error).slice(0, 300)}. Open "Import karma data" and start it again to resume.`
-    );
   }
   return c.json({}, 200);
 });

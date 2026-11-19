@@ -20,7 +20,6 @@ test('empty settings give these literal defaults', () => {
       tradeClosed: '1e0c3870-a456-11ea-aa7a-0ee73ab9d31f',
     },
     courierPage: 'custom_bot_config/courier_list',
-    webhookUrl: '',
     disclaimerUrl: DISCLAIMER,
   });
 });
@@ -33,12 +32,10 @@ test('the app is off until a moderator turns it on', () => {
 test('strings are trimmed and blank strings fall back', () => {
   const config = configFrom({
     courierPage: '  my/page  ',
-    discordWebhookUrl: ' https://hook.test ',
     disclaimerUrl: '   ',
     templateTier0: ' abc ',
   });
   assert.equal(config.courierPage, 'my/page');
-  assert.equal(config.webhookUrl, 'https://hook.test');
   assert.equal(config.disclaimerUrl, DISCLAIMER);
   assert.equal(config.templates.tier0, 'abc');
 });
@@ -146,9 +143,6 @@ test('the devvit.json default values agree with the defaults', () => {
     fromManifest('templateTradeClosed'),
     defaults.templates.tradeClosed
   );
-  // The webhook has no default: alerts are off until a moderator sets it.
-  assert.equal(fromManifest('discordWebhookUrl'), undefined);
-  assert.equal(defaults.webhookUrl, '');
 });
 
 test('every key configFrom reads is declared in devvit.json', () => {
@@ -162,7 +156,6 @@ test('every key configFrom reads is declared in devvit.json', () => {
     'templateTier100',
     'templateTradeClosed',
     'courierPage',
-    'discordWebhookUrl',
     'disclaimerUrl',
   ];
   assert.deepEqual(Object.keys(declared).sort(), keys.sort());

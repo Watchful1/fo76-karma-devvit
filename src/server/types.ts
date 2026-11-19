@@ -49,7 +49,6 @@ export type Config = {
   tradingFlairs: string[];
   templates: FlairTemplates;
   courierPage: string;
-  webhookUrl: string;
   disclaimerUrl: string;
 };
 
@@ -291,16 +290,10 @@ export interface RedditPort {
   lockPost(postId: string): Promise<void>;
 }
 
-export interface AlertPort {
-  /** Sends a line to the moderators' webhook, if one is set. Never throws. */
-  send(message: string): Promise<void>;
-}
-
 /** What the command handler needs from the outside world. */
 export type Ports = {
   reddit: RedditPort;
   store: StorePort;
-  alerts: AlertPort;
   config: Config;
   subredditName: string;
   now: () => number;

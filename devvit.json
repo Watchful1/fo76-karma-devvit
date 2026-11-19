@@ -1,6 +1,6 @@
 {
   "$schema": "https://developers.reddit.com/schema/config-file.v1.json",
-  "name": "fo76-karma-dev",
+  "name": "vault-tectradingco",
   "server": {
     "dir": "dist/server",
     "entry": "index.cjs"
@@ -116,10 +116,6 @@
         "label": "Wiki page with the courier list (YAML, a `couriers:` list)",
         "defaultValue": "custom_bot_config/courier_list"
       },
-      "discordWebhookUrl": {
-        "type": "string",
-        "label": "Discord webhook URL for alerts (leave empty to disable)"
-      },
       "disclaimerUrl": {
         "type": "string",
         "label": "Link in the footer of every reply",
@@ -136,10 +132,6 @@
   },
   "permissions": {
     "reddit": true,
-    "redis": true,
-    "http": {
-      "enable": true,
-      "domains": ["discord.com"]
-    }
+    "redis": true
   }
 }

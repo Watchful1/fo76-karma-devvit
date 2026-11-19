@@ -9,7 +9,7 @@ export class FakeReddit implements RedditPort {
   moderators = new Set<string>();
   readonly wiki = new Map<string, string>();
   /** The app's own account name, in whatever case a test wants to return it. */
-  appName = 'fo76-karma-dev';
+  appName = 'Vault-TecTradingCo';
 
   readonly replies: { target: ReplyTarget; text: string }[] = [];
   readonly flairs: { username: string; text: string; templateId: string }[] =

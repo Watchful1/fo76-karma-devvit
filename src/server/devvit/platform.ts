@@ -1,12 +1,11 @@
-// Wires the handler's ports to Devvit: this install's store, settings, Reddit
-// client and webhook.
+// Wires the handler's ports to Devvit: this install's store, settings and
+// Reddit client.
 
 import { context, reddit, redis, settings } from '@devvit/web/server';
 
 import { configFrom } from '../settings';
 import { Store, type RedisPort } from '../store';
 import type { Config, Ports } from '../types';
-import { discordAlerts } from './alerts';
 import { devvitReddit } from './reddit';
 
 export function store(): Store {
@@ -32,7 +31,6 @@ export async function ports(): Promise<Ports> {
   return {
     reddit: devvitReddit,
     store: store(),
-    alerts: discordAlerts(current.webhookUrl, context.appSlug),
     config: current,
     subredditName: context.subredditName,
     now: Date.now,

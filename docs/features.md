@@ -43,11 +43,11 @@ Moderators skip every check: they can give or take karma anywhere, including on 
 1. **Claims the comment:** sets `answered:<commentId>` to a `pending` token that carries its start time, if the key is unset. A `done` key means the command was answered and is not run again. A `pending` younger than 45 seconds means another request is handling the comment right now (a request is killed at 30), so this one stops. An older `pending` is an attempt that died, and this request takes it over.
 2. **Skips to step 4 if this comment's reward is already on record** from an earlier attempt. The checks are not run again: the daily count already includes this reward, and the point stands whatever has changed since.
 3. **Records everything in one Redis transaction:** the per-comment entry (the gate that makes one comment give at most one point, for moderators too), the once-per-pair entry and the daily cap (the gates for checks 6 and 7, for non-moderators, so a race gives one point), the karma increment, the day's count, the global event, and the giver's and receiver's history.
-4. Sets the receiver's flair (section 5). A failure here is alerted and does not stop the reply.
+4. Sets the receiver's flair (section 5). A failure here is logged and does not stop the reply.
 5. Replies.
 6. Sets `answered:<commentId>` to `done`.
 
-A failure after step 3 never gives a second point; it can lose the flair update or the reply, which the Discord alert reports and a moderator's **Re-run karma command** repairs. **Changed:** the old bot updated the score with a read-then-write and logged, scored and replied concurrently.
+A failure after step 3 never gives a second point; it can lose the flair update or the reply, which the log reports and a moderator's **Re-run karma command** repairs. **Changed:** the old bot updated the score with a read-then-write and logged, scored and replied concurrently.
 
 ## 4. Closing a post
 
@@ -71,7 +71,7 @@ The receiver's flair is rebuilt from their profile after every change:
 ## 7. Replies
 
 - Every reply ends with the "performed by a bot" footer and the disclaimer link, is distinguished as a moderator comment, and is locked.
-- A reply that Reddit rate-limits is retried once if the wait it names is under 10 seconds; otherwise the failure is alerted and the point stands.
+- A reply that Reddit rate-limits is retried once if the wait it names is under 10 seconds; otherwise the failure is logged and the point stands.
 - If the command comment can no longer be replied to, the reply goes on the post instead.
 - The wording is kept from the old bot, with two changes: the "deleted or removed" reply no longer mentions the user's own comment being removed (that case gets no reply now) and does mention the comment replied to being gone, and the daily-cap reply matches the UTC reset.
 
@@ -88,17 +88,15 @@ The receiver's flair is rebuilt from their profile after every change:
 
 Every moderator item checks on the server that the user moderates the subreddit; hiding the item is not the check.
 
-## 9. Alerts
+## 9. Failures
 
-A Discord webhook, set by the moderators in the app's settings, receives:
+The app's log, read with `devvit logs`, holds a line for:
 
-- an error that stopped a command from completing, with the comment's permalink;
-- a reward whose flair could not be set;
+- an error that stopped a command from completing, with the comment's id;
+- a reward whose flair could not be set, with the comment's permalink;
 - an import that finished, failed or was stopped.
 
-Messages cannot ping anyone: mentions are switched off in the request.
-
-With no webhook set, nothing is sent.
+The app sends nothing outside Reddit.
 
 ## 10. Settings
 
@@ -111,7 +109,6 @@ All per subreddit, editable by the moderators on the app's settings page:
 | Trading flair texts                                                         | `XBOX, PlayStation, PC`                                                                                          |
 | Five flair template ids: mods and couriers, 0–49, 50–99, 100+, Trade Closed | the live subreddit's ids, as the old bot had them in its code. A field that is cleared falls back to its default |
 | Courier wiki page                                                           | `custom_bot_config/courier_list`                                                                                 |
-| Discord webhook URL                                                         | empty                                                                                                            |
 | Disclaimer link                                                             | the current post on u/Vault-TecTradingCo                                                                         |
 
 ## 11. Data

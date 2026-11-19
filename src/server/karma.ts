@@ -76,7 +76,6 @@ export async function handleCommand(
     // The claim stays pending, so a moderator's re-run picks the command up again.
     const message = `Command ${where.text} (${input.source}) failed: ${String(error)}`;
     ports.log(message);
-    await ports.alerts.send(message);
     return 'failed';
   }
 }
@@ -332,7 +331,7 @@ async function afterReward(
   options: { reply: boolean }
 ): Promise<Outcome> {
   const { comment, author, post, roles, ports } = run;
-  const { reddit, store, config, alerts } = ports;
+  const { reddit, store, config } = ports;
   const link = permalinkFor(ports.subredditName, post.id, comment.id);
 
   try {
@@ -345,7 +344,6 @@ async function afterReward(
   } catch (error) {
     const message = `The karma at ${link} is recorded, but the flair of u/${receiver} could not be set: ${String(error)}. Re-run the command to set it.`;
     ports.log(message);
-    await alerts.send(message);
   }
 
   if (options.reply) {

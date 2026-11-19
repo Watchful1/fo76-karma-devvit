@@ -18,7 +18,6 @@ export const DEFAULTS: Config = {
     tradeClosed: '1e0c3870-a456-11ea-aa7a-0ee73ab9d31f',
   },
   courierPage: 'custom_bot_config/courier_list',
-  webhookUrl: '',
   disclaimerUrl:
     'https://www.reddit.com/user/Vault-TecTradingCo/comments/lkllre/disclaimer_for_rfallout76marketplace/',
 };
@@ -70,7 +69,6 @@ export function configFrom(raw: RawSettings): Config {
       ),
     },
     courierPage: text(raw, 'courierPage', DEFAULTS.courierPage),
-    webhookUrl: text(raw, 'discordWebhookUrl', ''),
     disclaimerUrl: text(raw, 'disclaimerUrl', DEFAULTS.disclaimerUrl),
   };
 }

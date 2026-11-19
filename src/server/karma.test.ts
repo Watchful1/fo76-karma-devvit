@@ -5,7 +5,7 @@ import { handleCommand, type CommandSource, type Outcome } from './karma';
 import { Store } from './store';
 import { FakeRedis } from './testing/fake-redis';
 import { FakeReddit } from './testing/fake-reddit';
-import type { AlertPort, CommentInfo, Config, Ports, PostInfo } from './types';
+import type { CommentInfo, Config, Ports, PostInfo } from './types';
 
 const T0 = 1_800_000_000_000;
 const DAY = '2027-01-15';
@@ -24,7 +24,6 @@ const CONFIG: Config = {
     tradeClosed: 'closed',
   },
   courierPage: COURIER_PAGE,
-  webhookUrl: '',
   disclaimerUrl: DISCLAIMER,
 };
 
@@ -44,18 +43,11 @@ function setup(configOverrides: Partial<Config> = {}) {
   const clock = { now: T0 };
   const reddit = new FakeReddit();
   const store = new Store(new FakeRedis(() => clock.now), () => clock.now);
-  const alertMessages: string[] = [];
-  const alerts: AlertPort = {
-    async send(message) {
-      alertMessages.push(message);
-    },
-  };
   const log: string[] = [];
   const config: Config = { ...CONFIG, ...configOverrides };
   const ports: Ports = {
     reddit,
     store,
-    alerts,
     config,
     subredditName: 'fo76',
     now: () => clock.now,
@@ -87,7 +79,9 @@ function setup(configOverrides: Partial<Config> = {}) {
     clock,
     reddit,
     store,
-    alertMessages,
+    /** The log lines that report a failure. */
+    problems: () =>
+      log.filter((line) => / failed: |could not be set/.test(line)),
     log,
     config,
     ports,
@@ -180,7 +174,7 @@ test('a command is disabled for a create event but a rerun still runs', async ()
   assert.equal((await s.store.loadProfile('Trader')).karma, 1);
 });
 
-for (const author of ['fo76-karma-dev', 'AutoModerator']) {
+for (const author of ['Vault-TecTradingCo', 'AutoModerator']) {
   test(`a command by ${author} is skipped`, async () => {
     const s = setup();
     const id = s.command('t1_bot', author, '+karma', { parentId: 't1_c1' });
@@ -513,7 +507,7 @@ test('a moderator command resumed after the transaction gives no second point', 
   assert.equal(await s.store.claim(id), 'done');
 });
 
-test('a flair failure after the point is alerted and the reply and finish still happen', async () => {
+test('a flair failure after the point is logged and the reply and finish still happen', async () => {
   const s = setup();
   const id = opRewards(s);
   s.reddit.failNext('setUserFlair');
@@ -523,13 +517,13 @@ test('a flair failure after the point is alerted and the reply and finish still 
   assert.equal((await s.store.loadProfile('Trader')).karma, 1);
   assert.equal(s.reddit.replies.length, 1);
   assert.equal(s.reddit.flairs.length, 0);
-  assert.equal(s.alertMessages.length, 1);
+  assert.equal(s.problems().length, 1);
   assert.ok(
-    s.alertMessages[0]?.includes(
+    s.problems()[0]?.includes(
       'https://www.reddit.com/r/fo76/comments/p1/_/cmd/'
     )
   );
-  assert.ok(s.alertMessages[0]?.includes('setUserFlair failed'));
+  assert.ok(s.problems()[0]?.includes('setUserFlair failed'));
   assert.equal(await s.run(id), 'already-handled');
 });
 
@@ -558,8 +552,8 @@ test('a failed reply leaves the claim pending, and the command resumes later wit
 
   assert.equal((await s.store.loadProfile('Trader')).karma, 1);
   assert.equal(s.reddit.replies.length, 0);
-  assert.equal(s.alertMessages.length, 1);
-  assert.ok(s.alertMessages[0]?.includes('reddit down'));
+  assert.equal(s.problems().length, 1);
+  assert.ok(s.problems()[0]?.includes('reddit down'));
   assert.equal(await s.run(id), 'already-handled', 'still in flight');
 
   restore();
@@ -601,8 +595,8 @@ test('the resumed 10th reward replies with success, not the cap refusal', async 
   assert.equal(s.reddit.replies.length, 1);
   assert.ok(s.reddit.replies[0]?.text.includes('successfully rewarded'));
   assert.ok(!s.reddit.replies[0]?.text.includes('limit'));
-  assert.equal(s.alertMessages.length, 1, 'only the failed first attempt');
-  assert.ok(s.alertMessages[0]?.includes('failed'));
+  assert.equal(s.problems().length, 1, 'only the failed first attempt');
+  assert.ok(s.problems()[0]?.includes('failed'));
 });
 
 test('two deliveries of one command at once give one point and one reply', async () => {
@@ -669,7 +663,7 @@ test('two commands at once from a giver one below the cap give one point and one
       .length,
     1
   );
-  assert.equal(s.alertMessages.length, 0);
+  assert.equal(s.problems().length, 0);
 });
 
 test('a removed command is ignored without a claim, for a moderator too', async () => {
@@ -716,7 +710,7 @@ test('a rerun of a finished rewarded command sets the flair again and sends no s
   assert.equal((await s.store.loadProfile('Trader')).karma, 1);
   assert.equal(s.reddit.replies.length, 1);
   assert.equal(s.reddit.flairs.length, 2);
-  assert.equal(s.alertMessages.length, 0);
+  assert.equal(s.problems().length, 0);
 });
 
 test('a rerun of a finished rewarded command at the cap is still rewarded, not refused', async () => {
@@ -789,14 +783,14 @@ test('a rerun of a command the bot never saw while disabled runs it', async () =
   assert.equal(s.reddit.flairs.length, 1);
 });
 
-test('the reward that reaches the daily cap is given and sends no alert', async () => {
+test('the reward that reaches the daily cap is given and logs no failure', async () => {
   const s = setup();
   await s.store.setGivenToday('OP', DAY, 9);
 
   assert.equal(await s.run(opRewards(s)), 'rewarded');
 
   assert.equal(await s.store.givenToday('OP', DAY), 10);
-  assert.equal(s.alertMessages.length, 0);
+  assert.equal(s.problems().length, 0);
 });
 
 test('OP closing a trading post flairs, locks and announces it', async () => {
@@ -868,7 +862,7 @@ for (const count of [8, 9, 10, 15]) {
     await s.store.setGivenToday('Mod', DAY, count);
     const id = s.command('t1_cmd', 'Mod', '+karma', { parentId: 't1_c1' });
     assert.equal(await s.run(id), 'rewarded');
-    assert.equal(s.alertMessages.length, 0);
+    assert.equal(s.problems().length, 0);
     assert.equal(await s.store.givenToday('Mod', DAY), count + 1);
   });
 }
@@ -891,35 +885,35 @@ test('a courier receiver gets the mods and couriers template and the courier lab
   ]);
 });
 
-test('a failed fetch is alerted and the outcome is failed', async () => {
+test('a failed fetch is logged and the outcome is failed', async () => {
   const s = setup();
   const id = opRewards(s);
   s.reddit.failNext('getComment');
 
   assert.equal(await s.run(id), 'failed');
 
-  assert.equal(s.alertMessages.length, 1);
-  assert.ok(s.alertMessages[0]?.includes(id));
+  assert.equal(s.problems().length, 1);
+  assert.ok(s.problems()[0]?.includes(id));
   assert.equal(s.reddit.replies.length, 0);
   assert.equal(await s.run(id), 'rewarded', 'nothing was claimed');
 });
 
-test('a failed post fetch is alerted and the command resumes later', async () => {
+test('a failed post fetch is logged and the command resumes later', async () => {
   const s = setup();
   const id = opRewards(s);
   s.reddit.failNext('getPost');
   assert.equal(await s.run(id), 'failed');
-  assert.equal(s.alertMessages.length, 1);
+  assert.equal(s.problems().length, 1);
   s.clock.now += IN_FLIGHT_PASSED;
   assert.equal(await s.run(id), 'rewarded');
   assert.equal((await s.store.loadProfile('Trader')).karma, 1);
 });
 
-for (const appName of ['Fo76-Karma-Dev', 'FO76-KARMA-DEV']) {
+for (const appName of ['vault-tectradingco', 'VAULT-TECTRADINGCO']) {
   test(`the app username is compared ignoring case (${appName})`, async () => {
     const s = setup();
     s.reddit.appName = appName;
-    const id = s.command('t1_bot', 'fo76-karma-dev', '+karma', {
+    const id = s.command('t1_bot', 'Vault-TecTradingCo', '+karma', {
       parentId: 't1_c1',
     });
     assert.equal(await s.run(id), 'skipped');
@@ -928,14 +922,14 @@ for (const appName of ['Fo76-Karma-Dev', 'FO76-KARMA-DEV']) {
   });
 }
 
-test('!close with a template sets the post flair and sends no alert', async () => {
+test('!close with a template sets the post flair and logs no failure', async () => {
   const s = setup();
   const id = s.command('t1_cmd', 'OP', '!close');
   assert.equal(await s.run(id), 'closed');
   assert.deepEqual(s.reddit.postFlairs, [
     { postId: 't3_p1', templateId: 'closed' },
   ]);
-  assert.equal(s.alertMessages.length, 0);
+  assert.equal(s.problems().length, 0);
 });
 
 test('a rerun of a finished !close flairs and locks again without a second reply', async () => {
