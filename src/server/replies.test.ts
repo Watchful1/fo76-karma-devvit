@@ -54,7 +54,7 @@ test('already-rewarded names the receiver and links the earlier command', () => 
   assert.ok(text.includes('[here](https://x/y)'));
 });
 
-test('removed no longer blames the giver comment, and cap says UTC', () => {
+test('removed thanks the giver without blaming AutoModerator, and cap says UTC', () => {
   const removed = karmaRefusalText('removed', { giver: 'alice' });
   assert.ok(!removed.includes('AutoModerator'));
   assert.ok(removed.includes('Thank you for your understanding.'));

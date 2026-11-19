@@ -1,30 +1,38 @@
-// The app's Redis store. Keys and shapes are docs/features.md §11.
+// Everything the app keeps in Redis. Keys, with usernames lowercased:
+//
+// - `karma` (hash): username to karma.
+// - `profiles` (hash): username to the Market76 karma and gamertags, as JSON.
+// - `rewards` (hash): `<postId>|<giver>|<receiver>` to the comment id of the
+//   reward, for the once-per-pair rule. Imported rewards are here too.
+// - `recorded` (hash): comment id to the reward that command recorded.
+// - `events` (sorted set): every reward as JSON, scored by its time.
+// - `history:<username>` (sorted set): the rewards a user gave or received.
+// - `given:<giver>:<YYYY-MM-DD>`: rewards given that UTC day, for the cap.
+// - `answered:<commentId>`: the claim of a command comment.
+// - `deleting` (hash): the placeholder of each profile deletion in progress.
+// - `import:progress` and `meta:<key>`: the state of the import.
 
+import { DAY_MS } from './time';
 import {
-  type ClaimResult,
   emptyProfile,
   type Gamertag,
-  type HistoryEntry,
   type ImportedReward,
   type Profile,
-  type RecordResult,
   type Reward,
-  type StorePort,
   userKey,
 } from './types';
 
 type ZMember = { member: string; score: number };
 
 type ZRangeOptions = {
-  reverse?: boolean;
-  by: 'score' | 'lex' | 'rank';
+  by: 'score' | 'rank';
   limit?: { offset: number; count: number };
 };
 
 /** The commands queued inside a transaction. */
 export interface RedisTxPort {
   multi(): Promise<void>;
-  exec(): Promise<any[]>; // eslint-disable-line @typescript-eslint/no-explicit-any
+  exec(): Promise<unknown[] | null>;
   unwatch(): Promise<unknown>;
   hSet(key: string, fieldValues: { [field: string]: string }): Promise<unknown>;
   hIncrBy(key: string, field: string, value: number): Promise<unknown>;
@@ -40,11 +48,9 @@ export interface RedisPort {
   set(
     key: string,
     value: string,
-    options?: { nx?: boolean; xx?: boolean; expiration?: Date }
+    options?: { nx?: boolean; expiration?: Date }
   ): Promise<string>;
   del(...keys: string[]): Promise<void>;
-  incrBy(key: string, value: number): Promise<number>;
-  expire(key: string, seconds: number): Promise<void>;
   zAdd(key: string, ...members: ZMember[]): Promise<number>;
   zRem(key: string, members: string[]): Promise<number>;
   zRange(
@@ -60,6 +66,24 @@ export interface RedisPort {
   hIncrBy(key: string, field: string, value: number): Promise<number>;
 }
 
+/**
+ * - `claimed`: this request is the first to handle the comment.
+ * - `resumed`: an earlier attempt did not finish, and this request took it over.
+ * - `busy`: another request is handling the comment right now.
+ * - `done`: the comment was answered before.
+ */
+type ClaimResult = 'claimed' | 'resumed' | 'busy' | 'done';
+
+type RecordResult =
+  | { kind: 'recorded' }
+  /** This very comment's reward is already on record. */
+  | { kind: 'already-recorded' }
+  | { kind: 'already-rewarded'; earlierCommentId: string }
+  | { kind: 'cap' };
+
+/** One line of a user's history: a reward they gave or received. */
+type HistoryEntry = ImportedReward & { kind: 'reward' };
+
 const KARMA = 'karma';
 const PROFILES = 'profiles';
 const REWARDS = 'rewards';
@@ -69,13 +93,12 @@ const EVENTS = 'events';
 const DELETING = 'deleting';
 const IMPORT_PROGRESS = 'import:progress';
 
-const DAY_MS = 24 * 60 * 60 * 1000;
 const ANSWERED_TTL_MS = 365 * DAY_MS;
 const GIVEN_TTL_SECONDS = 2 * 24 * 60 * 60;
 const PENDING = 'pending';
 const DONE = 'done';
 /** A request is killed after 30 seconds, so a pending claim older than this belongs to a dead attempt. */
-const IN_FLIGHT_MS = 45 * 1000;
+export const IN_FLIGHT_MS = 45 * 1000;
 /** Attempts at a transaction before giving up: each is lost only to another reward landing at the same moment. */
 const TX_ATTEMPTS = 4;
 /** Members per `zRange` call by score: the ceiling the client sets. */
@@ -87,7 +110,7 @@ const CHUNK = 500;
 const PLACEHOLDER_PREFIX = '[deleted-';
 
 /** Whether a name is the placeholder left by a deleted profile. */
-export function isPlaceholder(name: string): boolean {
+function isPlaceholder(name: string): boolean {
   return name.startsWith(PLACEHOLDER_PREFIX);
 }
 
@@ -127,8 +150,9 @@ function rewardJson(reward: ImportedReward): string {
   });
 }
 
-function rewardEntry(reward: ImportedReward): HistoryEntry {
-  return {
+/** The history entry of a reward, with a fixed key order like `rewardJson`. */
+function historyMember(reward: ImportedReward): ZMember {
+  const entry: HistoryEntry = {
     kind: 'reward',
     atMs: reward.atMs,
     commentId: reward.commentId,
@@ -137,17 +161,7 @@ function rewardEntry(reward: ImportedReward): HistoryEntry {
     receiver: reward.receiver,
     sign: reward.sign,
   };
-}
-
-function historyMember(entry: HistoryEntry): ZMember {
-  return { member: JSON.stringify(entry), score: entry.atMs };
-}
-
-function parseHistory(member: string): HistoryEntry {
-  const entry = JSON.parse(member) as HistoryEntry;
-  if (entry.kind === 'edit')
-    return { ...entry, after: entry.after ?? undefined };
-  return entry;
+  return { member: JSON.stringify(entry), score: reward.atMs };
 }
 
 function parseReward(json: string): ImportedReward {
@@ -167,18 +181,11 @@ function profileJson(profile: Profile): string {
   });
 }
 
-/** A transaction that was discarded because a watched key changed returns no replies. */
-function wasDiscarded(results: unknown[] | null | undefined): boolean {
-  return results === null || results === undefined || results.length === 0;
-}
-
-export class Store implements StorePort {
+export class Store {
   constructor(
     private readonly redis: RedisPort,
     private readonly now: () => number = Date.now
   ) {}
-
-  // ------------------------------------------------------------ profiles
 
   async loadProfile(username: string): Promise<Profile> {
     const key = userKey(username);
@@ -204,29 +211,26 @@ export class Store implements StorePort {
     };
   }
 
-  async saveProfile(profile: Profile): Promise<void> {
-    const key = userKey(profile.redditUsername);
-    await this.redis.hSet(PROFILES, { [key]: profileJson(profile) });
-    await this.redis.hSet(KARMA, { [key]: String(profile.karma) });
-  }
-
+  /** Writes the gamertags and Market76 karma, leaving the karma alone. */
   async saveDetails(profile: Profile): Promise<void> {
     await this.redis.hSet(PROFILES, {
       [userKey(profile.redditUsername)]: profileJson(profile),
     });
   }
 
+  /** Adds to a user's karma atomically and returns the new value. */
   async addKarma(username: string, delta: number): Promise<number> {
     return this.redis.hIncrBy(KARMA, userKey(username), delta);
   }
 
   /**
-   * Removes a profile and its history, and replaces the name with a placeholder
-   * wherever a trading partner's history or the event log still holds it.
-   * Everything to change is found through the user's own history, which has an
-   * entry for every reward they gave or received. Safe to run again after a
-   * failure: the placeholder is kept until the end, new entries are written
-   * before old ones are removed, and the user's history goes last.
+   * Removes a profile, its history and its entries in the reward indexes, and
+   * replaces the name with a placeholder wherever a trading partner's history
+   * or the event log still holds it. Returns the placeholder. Everything to
+   * change is found through the user's own history, which has an entry for
+   * every reward they gave or received. Safe to run again after a failure: the
+   * placeholder is kept until the end, new entries are written before old ones
+   * are removed, and the user's history goes last.
    */
   async deleteProfile(username: string): Promise<string> {
     const key = userKey(username);
@@ -235,6 +239,7 @@ export class Store implements StorePort {
       key,
       `${PLACEHOLDER_PREFIX}${crypto.randomUUID().slice(0, 8)}]`
     );
+    // Undefined only when another deletion of the same user finished just now.
     const placeholder = await this.redis.hGet(DELETING, key);
     if (placeholder === undefined)
       throw new Error(`No placeholder could be kept for ${username}`);
@@ -250,21 +255,24 @@ export class Store implements StorePort {
     const newEvents: ZMember[] = [];
     const partners = new Map<string, { old: string[]; renamed: ZMember[] }>();
     for (const row of rows) {
-      const entry = parseHistory(row.member);
+      // A history can hold entries of other kinds, such as moderator edits:
+      // only rewards name a partner.
+      const entry = JSON.parse(row.member) as { kind: string };
       if (entry.kind !== 'reward') continue;
+      const reward = entry as HistoryEntry;
       const renamed = {
-        ...entry,
-        giver: rename(entry.giver),
-        receiver: rename(entry.receiver),
+        ...reward,
+        giver: rename(reward.giver),
+        receiver: rename(reward.receiver),
       };
-      pairFields.add(rewardField(entry.postId, entry.giver, entry.receiver));
-      commentIds.add(entry.commentId);
-      oldEvents.push(rewardJson(entry));
-      newEvents.push({ member: rewardJson(renamed), score: entry.atMs });
+      pairFields.add(rewardField(reward.postId, reward.giver, reward.receiver));
+      commentIds.add(reward.commentId);
+      oldEvents.push(rewardJson(reward));
+      newEvents.push({ member: rewardJson(renamed), score: reward.atMs });
 
       // The partner's history holds the same member as the user's own.
       const partner =
-        userKey(entry.giver) === key ? entry.receiver : entry.giver;
+        userKey(reward.giver) === key ? reward.receiver : reward.giver;
       if (userKey(partner) === key || isPlaceholder(partner)) continue;
       const partnerKey = historyKey(partner);
       const changes = partners.get(partnerKey) ?? { old: [], renamed: [] };
@@ -293,9 +301,10 @@ export class Store implements StorePort {
     return placeholder;
   }
 
-  // ------------------------------------------------------------ commands
-
   /**
+   * Claims a comment for handling. With `takeOver`, an attempt that is still
+   * in flight is taken over too (a moderator's re-run).
+   *
    * Writes a unique pending token with nx and reads it back, since the result
    * of `set` with nx is undocumented. The token carries its start time, which
    * tells an attempt that is still running from one that died.
@@ -326,8 +335,7 @@ export class Store implements StorePort {
     });
   }
 
-  // ------------------------------------------------------------ rewards
-
+  /** The comment id of giver's earlier reward to receiver in the post, if any. */
   async earlierReward(
     postId: string,
     giver: string,
@@ -340,6 +348,7 @@ export class Store implements StorePort {
     return parseInteger(await this.redis.get(givenKey(giver, dayKey)));
   }
 
+  /** Sets a day's count outright (after an import that carries today's rewards). */
   async setGivenToday(
     giver: string,
     dayKey: string,
@@ -350,6 +359,7 @@ export class Store implements StorePort {
     });
   }
 
+  /** Small values kept between requests, such as the import's source. */
   async meta(key: string): Promise<string | undefined> {
     return this.redis.get(`meta:${key}`);
   }
@@ -358,15 +368,21 @@ export class Store implements StorePort {
     await this.redis.set(`meta:${key}`, value);
   }
 
+  /** The reward a command comment recorded, if it recorded one in this app. */
   async recordedReward(commentId: string): Promise<Reward | undefined> {
     const stored = await this.redis.hGet(RECORDED, commentId);
     return stored === undefined ? undefined : (parseReward(stored) as Reward);
   }
 
   /**
+   * One transaction: the per-comment and once-per-pair entries, the karma
+   * change, the day's count, the event and both histories. A comment records
+   * at most one reward, whoever sent it. With `enforceLimits` the pair entry
+   * and the daily cap are gates as well, and of two racing commands one wins.
+   *
    * Watches the two reward indexes and the day count of the giver, checks
-   * them, then writes everything in one transaction. A discarded transaction
-   * means another request wrote one of them in between, so the checks run again.
+   * them, then writes everything. A discarded transaction means another
+   * request wrote one of them in between, so the checks run again.
    */
   async recordReward(
     reward: Reward,
@@ -374,7 +390,6 @@ export class Store implements StorePort {
   ): Promise<RecordResult> {
     const field = rewardField(reward.postId, reward.giver, reward.receiver);
     const given = givenKey(reward.giver, options.dayKey);
-    const entry = rewardEntry(reward);
     const json = rewardJson(reward);
 
     for (let attempt = 0; attempt < TX_ATTEMPTS; attempt++) {
@@ -398,11 +413,14 @@ export class Store implements StorePort {
       await tx.incrBy(given, 1);
       await tx.expire(given, GIVEN_TTL_SECONDS);
       await tx.zAdd(EVENTS, { member: json, score: reward.atMs });
-      await tx.zAdd(historyKey(reward.giver), historyMember(entry));
+      await tx.zAdd(historyKey(reward.giver), historyMember(reward));
       if (userKey(reward.giver) !== userKey(reward.receiver)) {
-        await tx.zAdd(historyKey(reward.receiver), historyMember(entry));
+        await tx.zAdd(historyKey(reward.receiver), historyMember(reward));
       }
-      if (!wasDiscarded(await tx.exec())) return { kind: 'recorded' };
+      // A transaction discarded because a watched key changed returns no replies:
+      // an empty list, or null.
+      const replies = await tx.exec();
+      if (replies && replies.length > 0) return { kind: 'recorded' };
     }
     throw new Error(
       `The reward transaction for ${field} was discarded ${TX_ATTEMPTS} times`
@@ -430,32 +448,10 @@ export class Store implements StorePort {
     return count >= options.dailyCap ? { kind: 'cap' } : undefined;
   }
 
-  // ------------------------------------------------------------ history and events
-
-  async appendHistory(username: string, entry: HistoryEntry): Promise<void> {
-    await this.redis.zAdd(historyKey(username), historyMember(entry));
-  }
-
   /**
-   * Newest first, by rank: a reversed range by rank counts from the highest
-   * score, so entries that share a millisecond are never skipped between pages.
+   * Rewards from the given time on, oldest first, at most `limit`. A range by
+   * score returns at most a page per call, so this reads page after page.
    */
-  async history(
-    username: string,
-    options: { offset?: number; limit: number }
-  ): Promise<HistoryEntry[]> {
-    if (options.limit <= 0) return [];
-    const offset = Math.max(options.offset ?? 0, 0);
-    const rows = await this.redis.zRange(
-      historyKey(username),
-      offset,
-      offset + options.limit - 1,
-      { by: 'rank', reverse: true }
-    );
-    return rows.map((row) => parseHistory(row.member));
-  }
-
-  /** Oldest first. A range by score returns at most a page per call, so this reads page after page. */
   async eventsSince(sinceMs: number, limit: number): Promise<ImportedReward[]> {
     const rewards: ImportedReward[] = [];
     while (rewards.length < limit) {
@@ -469,8 +465,6 @@ export class Store implements StorePort {
     }
     return rewards;
   }
-
-  // ------------------------------------------------------------ import
 
   async importProgress(): Promise<{ rows: number; done: boolean }> {
     const stored = await this.redis.get(IMPORT_PROGRESS);
@@ -488,7 +482,11 @@ export class Store implements StorePort {
     );
   }
 
-  /** Every write overwrites the same field or member, so repeating a batch changes nothing. */
+  /**
+   * Loads one batch of imported profiles (karma included) and rewards. Every
+   * write overwrites the same field or member, so repeating a batch changes
+   * nothing.
+   */
   async importBatch(batch: {
     profiles: Profile[];
     rewards: ImportedReward[];
@@ -519,7 +517,7 @@ export class Store implements StorePort {
       fields[rewardField(reward.postId, reward.giver, reward.receiver)] =
         reward.commentId;
       events.push({ member: rewardJson(reward), score: reward.atMs });
-      const member = historyMember(rewardEntry(reward));
+      const member = historyMember(reward);
       addHistory(reward.giver, member);
       if (userKey(reward.giver) !== userKey(reward.receiver))
         addHistory(reward.receiver, member);

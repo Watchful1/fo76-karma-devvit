@@ -73,7 +73,7 @@
     "subreddit": {
       "enabled": {
         "type": "boolean",
-        "label": "Enabled: answer karma and close commands. Leave off until the old bot is stopped.",
+        "label": "Enabled: answer karma and close commands. Turn off to pause the bot.",
         "defaultValue": false
       },
       "dailyCap": {

@@ -1,4 +1,11 @@
 node_modules/
 dist/
 .env
+.env.*
 .DS_Store
+
+# Karma data holds usernames and gamertags: never commit it.
+# src/server/data/snapshot.json is tracked only as the empty placeholder.
+fallout76marketplace_karma_db.*.json
+mongo-export/
+delta*.json

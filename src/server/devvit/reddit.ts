@@ -15,7 +15,7 @@ function authorOf(name: string | undefined): string | undefined {
 }
 
 /** Whether a wiki read failed because the page is not there, as opposed to a failure worth reporting. */
-export function isMissingPage(error: unknown): boolean {
+function isMissingPage(error: unknown): boolean {
   return /404|not[ _]?found|PAGE_NOT_CREATED|does(n't| not) exist/i.test(
     String(error)
   );
@@ -28,6 +28,15 @@ export const devvitReddit: RedditPort = {
     cachedAppUsername ??=
       (await reddit.getAppUser())?.username ?? context.appSlug;
     return cachedAppUsername;
+  },
+
+  async currentModerator(): Promise<string | undefined> {
+    const user = await reddit.getCurrentUser();
+    if (!user) return undefined;
+    const permissions = await user.getModPermissionsForSubreddit(
+      context.subredditName
+    );
+    return permissions.length > 0 ? user.username : undefined;
   },
 
   async getComment(id: string): Promise<CommentInfo> {
@@ -44,7 +53,6 @@ export const devvitReddit: RedditPort = {
         comment.removed ||
         comment.spam ||
         (comment.bannedAtUtc > 0 && !comment.approved),
-      permalink: comment.permalink,
     };
   },
 
@@ -55,8 +63,6 @@ export const devvitReddit: RedditPort = {
       authorName: authorOf(post.authorName),
       flairText: post.flair?.text ?? '',
       removed: post.removed || Boolean(post.removedByCategory),
-      locked: post.locked,
-      permalink: post.permalink,
     };
   },
 
@@ -113,7 +119,7 @@ export const devvitReddit: RedditPort = {
     }
   },
 
-  async replyLocked(target: ReplyTarget, text: string): Promise<string> {
+  async replyLocked(target: ReplyTarget, text: string): Promise<void> {
     const id =
       target.kind === 'comment' ? asCommentId(target.id) : asPostId(target.id);
     const posted = await withRateLimitRetry(() =>
@@ -128,7 +134,6 @@ export const devvitReddit: RedditPort = {
         `Reply ${posted.id} was posted but not distinguished or locked: ${String(error)}`
       );
     }
-    return posted.id;
   },
 
   async setUserFlair(

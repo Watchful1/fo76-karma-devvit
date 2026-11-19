@@ -20,5 +20,7 @@ Comment on a trading post:
 
 [Terms of Service](docs/legal/terms.md) · [Privacy Policy](docs/legal/privacy-policy.md)
 
-This app is part of the App Migration Program: it migrates the Data API app
-Fallout76MarketplaceKarmaBot.
+To work on the bot, see [CONTRIBUTING.md](CONTRIBUTING.md).
+
+This app is part of Reddit's App Migration Program: it replaces the earlier
+karma bot of the same account, Fallout76MarketplaceKarmaBot.

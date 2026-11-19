@@ -10,22 +10,25 @@ export class FakeReddit implements RedditPort {
   readonly wiki = new Map<string, string>();
   /** The app's own account name, in whatever case a test wants to return it. */
   appName = 'Vault-TecTradingCo';
+  /** The user making the request, for `currentModerator`. */
+  currentUser: string | undefined;
 
   readonly replies: { target: ReplyTarget; text: string }[] = [];
   readonly flairs: { username: string; text: string; templateId: string }[] =
     [];
   readonly postFlairs: { postId: string; templateId: string }[] = [];
   readonly locked: string[] = [];
-  readonly wikiWrites: { page: string; content: string; reason: string }[] = [];
   readonly clearedFlairs: string[] = [];
-  /** When set, the next call to the named port method throws it, once. */
-  private readonly failures = new Map<string, Error>();
+  /** Port methods that throw, with whether they throw only once. */
+  private readonly failures = new Map<
+    string,
+    { error: Error; once: boolean }
+  >();
 
   /** Every call to a port method, so a test can show nothing was fetched. */
   calls = 0;
   private readonly callsByName = new Map<string, number>();
 
-  private replyCount = 0;
   private readonly failingReplyTargets = new Set<string>();
 
   addComment(info: CommentInfo): void {
@@ -43,7 +46,16 @@ export class FakeReddit implements RedditPort {
 
   /** Makes the next call to a port method throw, once. */
   failNext(method: string, error: Error = new Error(`${method} failed`)): void {
-    this.failures.set(method, error);
+    this.failures.set(method, { error, once: true });
+  }
+
+  /** Makes every call to a port method throw until the returned function is called. */
+  failUntilRestored(
+    method: string,
+    error: Error = new Error(`${method} failed`)
+  ): () => void {
+    this.failures.set(method, { error, once: false });
+    return () => this.failures.delete(method);
   }
 
   callCount(name: string): number {
@@ -55,14 +67,20 @@ export class FakeReddit implements RedditPort {
     this.callsByName.set(name, this.callCount(name) + 1);
     const failure = this.failures.get(name);
     if (failure) {
-      this.failures.delete(name);
-      throw failure;
+      if (failure.once) this.failures.delete(name);
+      throw failure.error;
     }
   }
 
   async appUsername(): Promise<string> {
     this.called('appUsername');
     return this.appName;
+  }
+
+  async currentModerator(): Promise<string | undefined> {
+    this.called('currentModerator');
+    const user = this.currentUser;
+    return user && this.moderators.has(user.toLowerCase()) ? user : undefined;
   }
 
   async getComment(id: string): Promise<CommentInfo> {
@@ -89,24 +107,17 @@ export class FakeReddit implements RedditPort {
     return this.wiki.get(page);
   }
 
-  async writeModWikiPage(
-    page: string,
-    content: string,
-    reason: string
-  ): Promise<boolean> {
+  async writeModWikiPage(page: string, content: string): Promise<boolean> {
     this.called('writeModWikiPage');
     this.wiki.set(page, content);
-    this.wikiWrites.push({ page, content, reason });
     return true;
   }
 
-  async replyLocked(target: ReplyTarget, text: string): Promise<string> {
+  async replyLocked(target: ReplyTarget, text: string): Promise<void> {
     this.called('replyLocked');
     if (this.failingReplyTargets.delete(target.id))
       throw new Error(`Cannot reply to ${target.id}`);
     this.replies.push({ target, text });
-    this.replyCount++;
-    return `t1_reply${this.replyCount}`;
   }
 
   async setUserFlair(

@@ -4,40 +4,68 @@ import { test } from 'node:test';
 import { parseCourierList, Roles } from './roles';
 import { FakeReddit } from './testing/fake-reddit';
 
+const couriers = (page: string | undefined) => [...parseCourierList(page)];
+
 test('a couriers list is read with quotes, u/ prefixes and comments', () => {
   const page = [
     '# who may carry',
     'couriers:',
     '  - Alice',
     '  # a comment inside the list',
+    '  #another',
     '  - "Bob_The_Courier"',
     "  - 'carol'",
     '  - u/Dave',
     '  - U/Eve',
+    '  - /u/Gus # a trailing comment',
+    '  - Al#x',
     '',
     '  -   Frank  ',
   ].join('\n');
+  assert.deepEqual(couriers(page).sort(), [
+    'al#x',
+    'alice',
+    'bob_the_courier',
+    'carol',
+    'dave',
+    'eve',
+    'frank',
+    'gus',
+  ]);
+});
+
+test('the flow form couriers: [Bob, "Al", u/Cy] lists all three', () => {
+  assert.deepEqual(couriers('couriers: [Bob, "Al", u/Cy]').sort(), [
+    'al',
+    'bob',
+    'cy',
+  ]);
+  assert.deepEqual(couriers("couriers: [ 'Bob' ,/u/Dee ]  # note").sort(), [
+    'bob',
+    'dee',
+  ]);
+});
+
+test('only items under the couriers key count, until the next top-level key', () => {
+  assert.deepEqual(couriers('- mallory\ncouriers:\n- alice\n'), ['alice']);
   assert.deepEqual(
-    [...parseCourierList(page)].sort(),
-    ['alice', 'bob_the_courier', 'carol', 'dave', 'eve', 'frank'].sort()
+    couriers('couriers:\n  - alice\nnotes: x\n  - mallory\nmore:\n  - eve\n'),
+    ['alice']
   );
 });
 
-test('a following top-level key ends the list', () => {
-  const page = 'couriers:\n  - alice\nother_key:\n  - mallory\n';
-  assert.deepEqual([...parseCourierList(page)], ['alice']);
+test('a --- line does not add a courier named --', () => {
+  const names = parseCourierList('couriers:\n  - alice\n---\n  - bob\n');
+  assert.equal(names.has('--'), false);
+  assert.equal(names.has('alice'), true);
 });
 
-test('items before the couriers key are ignored', () => {
-  const page = '- mallory\ncouriers:\n- alice\n';
-  assert.deepEqual([...parseCourierList(page)], ['alice']);
-});
-
-test('Windows line endings are handled', () => {
+test('Windows line endings work, with comments and the flow form too', () => {
   assert.deepEqual(
-    [...parseCourierList('couriers:\r\n  - Alice\r\n  - Bob\r\n')],
+    couriers('couriers:\r\n  - Alice # a\r\n\r\n  - Bob\r\nx: 1\r\n'),
     ['alice', 'bob']
   );
+  assert.deepEqual(couriers('couriers: [A1b, C2d]\r\n'), ['a1b', 'c2d']);
 });
 
 test('an undefined or empty page gives no couriers', () => {
@@ -45,19 +73,25 @@ test('an undefined or empty page gives no couriers', () => {
   assert.equal(parseCourierList('').size, 0);
 });
 
-test('the courier page is read once for several lookups, matched ignoring case', async () => {
+test('the courier page is read once for several users, matched ignoring case', async () => {
   const reddit = new FakeReddit();
-  reddit.wiki.set('page', 'couriers:\n  - Alice\n');
+  reddit.wiki.set('page', 'couriers:\n  - Alice\n  - b2\n');
   const roles = new Roles(reddit, 'page');
-  assert.equal(await roles.isCourier('ALICE'), true);
+  const parties = await Promise.all([
+    roles.party('ALICE'),
+    roles.party('b2'),
+    roles.party('c3'),
+  ]);
+  assert.deepEqual(
+    parties.map((party) => party.isCourier),
+    [true, true, false]
+  );
   assert.equal(await roles.isCourier('alice'), true);
-  assert.equal(await roles.isCourier('bob'), false);
   assert.equal(reddit.callCount('readWikiPage'), 1);
 });
 
 test('a missing courier page means nobody is a courier', async () => {
-  const reddit = new FakeReddit();
-  const roles = new Roles(reddit, 'missing');
+  const roles = new Roles(new FakeReddit(), 'missing');
   assert.equal(await roles.isCourier('alice'), false);
 });
 
@@ -86,80 +120,6 @@ test('party combines both roles', async () => {
     isMod: false,
     isCourier: true,
   });
-});
-
-test('a trailing comment is stripped and a comment-only line is skipped', () => {
-  const page =
-    'couriers:\n  - Bob # note\n  # only a comment\n  #another\n  - Al#x\n';
-  assert.deepEqual([...parseCourierList(page)].sort(), ['al#x', 'bob']);
-});
-
-test('the flow form couriers: [Bob, "Al", u/Cy] lists all three', () => {
-  assert.deepEqual(
-    [...parseCourierList('couriers: [Bob, "Al", u/Cy]')].sort(),
-    ['al', 'bob', 'cy']
-  );
-  assert.deepEqual(
-    [...parseCourierList("couriers: [ 'Bob' ,/u/Dee ]  # note")].sort(),
-    ['bob', 'dee']
-  );
-});
-
-test('/u/Name and u/Name are both stripped', () => {
-  assert.deepEqual(
-    [...parseCourierList('couriers:\n  - /u/Name\n  - u/Other\n')].sort(),
-    ['name', 'other']
-  );
-});
-
-test('a later top-level key ends the list, and its items are not couriers', () => {
-  const page = 'couriers:\n  - alice\nnotes: x\n  - mallory\nmore:\n  - eve\n';
-  assert.deepEqual([...parseCourierList(page)], ['alice']);
-});
-
-test('a --- line does not add a courier named --', () => {
-  const page = 'couriers:\n  - alice\n---\n  - bob\n';
-  const names = parseCourierList(page);
-  assert.equal(names.has('--'), false);
-  assert.equal(names.has('alice'), true);
-});
-
-test('quoted names lose their quotes', () => {
-  assert.deepEqual(
-    [...parseCourierList('couriers:\n  - "Quoted"\n  - \'Single\'\n')].sort(),
-    ['quoted', 'single']
-  );
-});
-
-test('Windows line endings work with comments and the flow form too', () => {
-  assert.deepEqual(
-    [
-      ...parseCourierList(
-        'couriers:\r\n  - Alice # a\r\n\r\n  - Bob\r\nx: 1\r\n'
-      ),
-    ],
-    ['alice', 'bob']
-  );
-  assert.deepEqual(
-    [...parseCourierList('couriers: [A1b, C2d]\r\n')],
-    ['a1b', 'c2d']
-  );
-});
-
-test('the wiki page is read once for several different users', async () => {
-  const reddit = new FakeReddit();
-  reddit.wiki.set('page', 'couriers:\n  - a1\n  - b2\n');
-  const roles = new Roles(reddit, 'page');
-  const parties = await Promise.all([
-    roles.party('a1'),
-    roles.party('b2'),
-    roles.party('c3'),
-  ]);
-  assert.deepEqual(
-    parties.map((party) => party.isCourier),
-    [true, true, false]
-  );
-  assert.equal(reddit.callCount('readWikiPage'), 1);
 });
 
 test('a wiki read that throws makes isCourier reject, not answer "no couriers"', async () => {

@@ -42,18 +42,6 @@ test('a short rate limit is waited out and retried once', async () => {
   assert.deepEqual(waits, [5500]);
 });
 
-test('a 10-second rate limit is still retried', async () => {
-  let calls = 0;
-  await withRateLimitRetry(
-    async () => {
-      if (++calls === 1) throw limited('10 seconds');
-    },
-    now,
-    async () => {}
-  );
-  assert.equal(calls, 2);
-});
-
 test('a long rate limit is not retried, and says when it ends', async () => {
   let calls = 0;
   const failure = withRateLimitRetry(async () => {

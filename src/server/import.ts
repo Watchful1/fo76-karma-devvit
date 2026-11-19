@@ -1,16 +1,23 @@
-// Loads the compacted export of the old karma bot into the store, a batch of
-// rows per hop. The format is written by scripts/compact-export.mjs.
+// Loads the compacted export of the old karma bot into the store. The format
+// is written by scripts/compact-export.mjs. The scheduler job runs the import
+// in hops (src/routes/scheduler.ts); each hop loads batch after batch until its
+// time is up, and the progress between batches is kept in the store.
 
-import type {
-  Gamertag,
-  ImportedReward,
-  Platform,
-  Profile,
-  StorePort,
+import bundled from './data/snapshot.json';
+import { asCommentId, asPostId } from './ids';
+import type { Store } from './store';
+import { utcDayKey } from './time';
+import {
+  PLATFORMS,
+  userKey,
+  type Gamertag,
+  type ImportedReward,
+  type Platform,
+  type Profile,
+  type RedditPort,
 } from './types';
-import { PLATFORMS } from './types';
 
-export type GamertagRow = [platform: string, username: string, userId: string];
+type GamertagRow = [platform: Platform, username: string, userId: string];
 export type ProfileRow = [
   redditUsername: string,
   karma: number,
@@ -32,13 +39,13 @@ export type Snapshot = {
   rewards: RewardRow[];
 };
 
-/** Rows loaded per hop of the import job. */
-export const BATCH_ROWS = 1000;
+/** Rows per batch: each reward row can cost up to three sorted-set writes, so a batch takes a few seconds at most. */
+const BATCH_ROWS = 300;
 
-type ImportStore = Pick<
-  StorePort,
-  'importProgress' | 'setImportProgress' | 'importBatch'
->;
+const SOURCE = 'import:source';
+const STATUS = 'import:status';
+/** The id of the chain of hops that may run; a hop from any other chain stops. */
+const RUN = 'import:run';
 
 const isString = (value: unknown): value is string => typeof value === 'string';
 const isNumber = (value: unknown): value is number =>
@@ -118,6 +125,9 @@ export function parseSnapshot(json: string): Snapshot {
   };
 }
 
+/** A markdown backslash escape: a backslash before ASCII punctuation. */
+const MARKDOWN_ESCAPE = /\\([!-/:-@[-`{-~])/g;
+
 /**
  * Parses a snapshot pasted on a wiki page. Reddit returns wiki text with
  * `&`, `<` and `>` as HTML entities, so those are decoded first; they never
@@ -148,13 +158,17 @@ export function parsePastedSnapshot(content: string): Snapshot {
   throw firstError;
 }
 
-/** A markdown backslash escape: a backslash before ASCII punctuation. */
-const MARKDOWN_ESCAPE = /\\([!-/:-@[-`{-~])/g;
-
-function gamertagFromRow([platform, username, userId]: GamertagRow): Gamertag {
-  if (!PLATFORMS.includes(platform as Platform))
-    throw new Error(`Unknown platform "${platform}" for ${username}`);
-  return { platform: platform as Platform, username, userId };
+/** The snapshot named by an import source: the bundled file, or `wiki:<page>` for a delta on a wiki page. */
+export async function loadSnapshot(
+  reddit: Pick<RedditPort, 'readWikiPage'>,
+  source: string
+): Promise<Snapshot> {
+  if (source === 'bundled') return parseSnapshot(JSON.stringify(bundled));
+  const page = source.replace(/^wiki:/, '');
+  const content = await reddit.readWikiPage(page);
+  if (content === undefined)
+    throw new Error(`Wiki page ${page} does not exist`);
+  return parsePastedSnapshot(content);
 }
 
 export function profileFromRow([
@@ -167,12 +181,13 @@ export function profileFromRow([
     redditUsername,
     karma,
     m76Karma,
-    gamertags: gamertags.map(gamertagFromRow),
+    gamertags: gamertags.map(([platform, username, userId]): Gamertag => ({
+      platform,
+      username,
+      userId,
+    })),
   };
 }
-
-const withPrefix = (id: string, prefix: string) =>
-  id.startsWith(prefix) ? id : prefix + id;
 
 /** Reddit ids are stored with their `t1_`/`t3_` prefix; the old log has none. */
 export function rewardFromRow([
@@ -183,8 +198,8 @@ export function rewardFromRow([
   atMs,
 ]: RewardRow): ImportedReward {
   return {
-    commentId: withPrefix(commentId, 't1_'),
-    postId: withPrefix(postId, 't3_'),
+    commentId: asCommentId(commentId),
+    postId: asPostId(postId),
     giver,
     receiver,
     sign: 0,
@@ -192,19 +207,14 @@ export function rewardFromRow([
   };
 }
 
-/** Time in ms of the newest reward in the snapshot. */
-export function importedAtLeast(snapshot: Snapshot): number {
-  return snapshot.newestMs;
-}
-
 /**
  * Loads the next batch of rows (profiles first, then rewards) and advances the
- * progress. The progress moves only after the batch is stored, so a hop that
+ * progress. The progress moves only after the batch is stored, so a batch that
  * fails is repeated with the same rows. Does nothing once the import is done.
  */
-export async function importHop(
+export async function importNextBatch(
   snapshot: Snapshot,
-  store: ImportStore,
+  store: Pick<Store, 'importProgress' | 'setImportProgress' | 'importBatch'>,
   batchRows: number = BATCH_ROWS
 ): Promise<{ rows: number; total: number; done: boolean }> {
   const total = snapshot.profiles.length + snapshot.rewards.length;
@@ -232,15 +242,115 @@ export async function importHop(
   return { ...next, total };
 }
 
-/** For a delta: the number of rewards per `<giver lowercased>|<day>`, to become the day's `given:` counts. */
-export function dailyCountsFrom(
-  rewards: ImportedReward[],
-  dayKey: (ms: number) => string
-): Map<string, number> {
+/**
+ * The rewards of today (UTC) count against the daily cap: sets each giver's
+ * count for today from the events, after an import that carries some.
+ */
+export async function setTodaysCounts(
+  store: Store,
+  nowMs: number
+): Promise<void> {
+  const today = utcDayKey(nowMs);
   const counts = new Map<string, number>();
-  for (const reward of rewards) {
-    const key = `${reward.giver.toLowerCase()}|${dayKey(reward.atMs)}`;
-    counts.set(key, (counts.get(key) ?? 0) + 1);
+  for (const reward of await store.eventsSince(Date.parse(today), 100_000)) {
+    if (utcDayKey(reward.atMs) !== today) continue;
+    const giver = userKey(reward.giver);
+    counts.set(giver, (counts.get(giver) ?? 0) + 1);
   }
-  return counts;
+  for (const [giver, count] of counts)
+    await store.setGivenToday(giver, today, count);
+}
+
+/** Where the last import stands, kept between the hops of the import job. */
+export type ImportStatus = {
+  source: string;
+  state: 'running' | 'done' | 'failed' | 'stopped';
+  rows: number;
+  total: number;
+  /** When the state last changed or a hop last finished. */
+  atMs: number;
+  error?: string;
+};
+
+/** A running import that has not advanced for this long has stopped without saying so. */
+export const IMPORT_STALLED_MS = 3 * 60 * 1000;
+
+export async function importStatus(
+  store: Store
+): Promise<ImportStatus | undefined> {
+  const stored = await store.meta(STATUS);
+  return stored === undefined
+    ? undefined
+    : (JSON.parse(stored) as ImportStatus);
+}
+
+export async function setImportStatus(
+  store: Store,
+  status: Omit<ImportStatus, 'atMs'>
+): Promise<void> {
+  await store.setMeta(STATUS, JSON.stringify({ ...status, atMs: Date.now() }));
+}
+
+function utcTime(ms: number): string {
+  return new Date(ms).toISOString().slice(0, 16).replace('T', ' ');
+}
+
+export function importStatusText(
+  status: ImportStatus | undefined,
+  nowMs: number
+): string {
+  if (!status) return 'No import has run on this install.';
+  const progress = `${status.rows} of ${status.total} rows from ${status.source}`;
+  const at = `${utcTime(status.atMs)} UTC`;
+  switch (status.state) {
+    case 'done':
+      return `Last import: finished, ${progress}, at ${at}.`;
+    case 'failed':
+      return `Last import: FAILED at ${progress}, at ${at}: ${status.error ?? 'unknown error'}. Start it again with the same source to resume.`;
+    case 'stopped':
+      return `Last import: stopped at ${progress}, at ${at}, because Enabled was turned on. Turn it off and start again to resume.`;
+    case 'running':
+      return nowMs - status.atMs > IMPORT_STALLED_MS
+        ? `Last import: STALLED at ${progress}; no progress since ${at}. Start it again with the same source to resume.`
+        : `An import is running: ${progress}, last progress at ${at}. Starting again restarts the job from where it is.`;
+  }
+}
+
+/**
+ * Prepares a chain of hops that loads `source`, and returns the chain's id for
+ * the first hop. The same unfinished source resumes where it stopped; a
+ * different source, or a finished one, starts over. A chain started earlier
+ * stops at its next hop. Returns undefined, changing nothing, when `source`
+ * already finished and `again` is false.
+ */
+export async function startImport(
+  store: Store,
+  source: string,
+  total: number,
+  again: boolean
+): Promise<string | undefined> {
+  const sameSource = (await store.meta(SOURCE)) === source;
+  const progress = await store.importProgress();
+  if (sameSource && progress.done && !again) return undefined;
+  const restart = !sameSource || progress.done;
+  if (restart) await store.setImportProgress({ rows: 0, done: false });
+
+  const run = crypto.randomUUID();
+  await store.setMeta(SOURCE, source);
+  await store.setMeta(RUN, run);
+  const rows = restart ? 0 : progress.rows;
+  await setImportStatus(store, { source, state: 'running', rows, total });
+  return run;
+}
+
+/** The source being imported, if `run` is the chain of hops that may run. */
+export async function currentImportSource(
+  store: Store,
+  run: string | undefined
+): Promise<string | undefined> {
+  const [source, current] = await Promise.all([
+    store.meta(SOURCE),
+    store.meta(RUN),
+  ]);
+  return run !== undefined && run === current ? source : undefined;
 }

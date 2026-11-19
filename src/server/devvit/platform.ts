@@ -1,25 +1,21 @@
-// Wires the handler's ports to Devvit: this install's store, settings and
-// Reddit client.
+// Wires the handler's ports to Devvit: this install's store, settings,
+// scheduler and Reddit client.
 
-import { context, reddit, redis, settings } from '@devvit/web/server';
+import { context, redis, scheduler, settings } from '@devvit/web/server';
 
 import { configFrom } from '../settings';
 import { Store, type RedisPort } from '../store';
 import type { Config, Ports } from '../types';
 import { devvitReddit } from './reddit';
 
-export function store(): Store {
-  return new Store(redis as RedisPort);
-}
+/** The scheduler task of devvit.json that runs one hop of the import. */
+export const IMPORT_JOB = 'import-hop';
 
-/** The username of the user making this request, if they moderate the subreddit. */
-export async function currentModerator(): Promise<string | undefined> {
-  const user = await reddit.getCurrentUser();
-  if (!user) return undefined;
-  const permissions = await user.getModPermissionsForSubreddit(
-    context.subredditName
-  );
-  return permissions.length > 0 ? user.username : undefined;
+// Typed as the port, so the compiler checks that the client fits it.
+const redisPort: RedisPort = redis;
+
+export function store(): Store {
+  return new Store(redisPort);
 }
 
 export async function config(): Promise<Config> {
@@ -27,13 +23,23 @@ export async function config(): Promise<Config> {
 }
 
 export async function ports(): Promise<Ports> {
-  const current = await config();
   return {
     reddit: devvitReddit,
     store: store(),
-    config: current,
+    config: await config(),
     subredditName: context.subredditName,
     now: Date.now,
     log: (message) => console.log(message),
   };
+}
+
+export async function scheduleImportHop(
+  run: string,
+  delayMs = 0
+): Promise<void> {
+  await scheduler.runJob({
+    name: IMPORT_JOB,
+    runAt: new Date(Date.now() + delayMs),
+    data: { run },
+  });
 }

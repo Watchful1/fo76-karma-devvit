@@ -1,6 +1,5 @@
-import type { KarmaRefusal } from './types';
+import type { CloseRefusal, KarmaRefusal } from './types';
 
-/** The text of a successful karma command. */
 export function karmaSuccessText(
   giver: string,
   receiver: string,
@@ -11,11 +10,10 @@ export function karmaSuccessText(
   }
   return (
     `Hi u/${giver}! You have successfully rewarded u/${receiver} with one karma point! Please note that karma may take ` +
-    `sometime to update.`
+    `some time to update.`
   );
 }
 
-/** The text of a refused karma command. */
 export function karmaRefusalText(
   reason: KarmaRefusal,
   context: { giver: string; receiver?: string; earlierLink?: string }
@@ -66,8 +64,7 @@ export function closeSuccessText(): string {
   return 'The submission has been closed, and comments have been locked. Please contact mods if you want to open the submission.';
 }
 
-/** The text of a refused close command. */
-export function closeRefusalText(reason: 'not-op' | 'not-trading'): string {
+export function closeRefusalText(reason: CloseRefusal): string {
   if (reason === 'not-op') {
     return 'The submission can only be closed by the OP or the mods. Please report the post if it is breaking rules.';
   }

@@ -1,4 +1,5 @@
-import type { FlairTemplates, Platform, Profile } from './types';
+import { Roles } from './roles';
+import type { FlairTemplates, Platform, Ports, Profile } from './types';
 
 const EMOJIS: [Platform, string][] = [
   ['XBOX', ':xbox:'],
@@ -35,4 +36,18 @@ function templateFor(
   if (karma >= 100) return templates.tier100;
   if (karma >= 50) return templates.tier50;
   return templates.tier0;
+}
+
+/** Sets a user's flair from their stored profile and their role. */
+export async function refreshFlair(
+  ports: Pick<Ports, 'reddit' | 'store' | 'config'>,
+  username: string,
+  roles = new Roles(ports.reddit, ports.config.courierPage)
+): Promise<void> {
+  const flair = flairFor(
+    await ports.store.loadProfile(username),
+    await roles.party(username),
+    ports.config.templates
+  );
+  await ports.reddit.setUserFlair(username, flair.text, flair.templateId);
 }

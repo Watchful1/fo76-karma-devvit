@@ -1,20 +1,63 @@
-// The forms the menu items open, and the reading of what they submit. Pure:
-// builders take data and return a Devvit form. Values are pre-filled through
-// each field's defaultValue, since a form's `data` does not pre-fill on this
-// platform version.
+// What the menu items and forms show, and the reading of what the forms
+// submit. Form builders take data and return a Devvit form. Values are
+// pre-filled through each field's defaultValue, since a form's `data` does not
+// pre-fill on this platform version.
 
-import type { Form, FormField } from '@devvit/shared-types/shared/form.js';
+import type { Form, FormField, UiResponse } from '@devvit/web/shared';
 
-import { PLATFORMS, type ImportedReward, type Profile } from './types';
+import {
+  PLATFORMS,
+  type ImportedReward,
+  type Profile,
+  type RedditPort,
+} from './types';
 
 /** The largest karma a moderator can type, so a slip of the keyboard is refused. */
 export const KARMA_LIMIT = 1_000_000;
 const GAMERTAG_MAX = 64;
+const TOAST_MAX = 250;
+
+export const BAD_USERNAME = 'That is not a Reddit username.';
+
+export function toast(text: string): UiResponse {
+  return { showToast: text.slice(0, TOAST_MAX) };
+}
+
+/**
+ * Runs a moderator-only action. `forUserType` in devvit.json only hides a menu
+ * item, so every moderator endpoint checks the user here, on the server.
+ */
+export async function moderatorOnly(
+  reddit: Pick<RedditPort, 'currentModerator'>,
+  run: (moderator: string) => Promise<UiResponse>
+): Promise<UiResponse> {
+  const moderator = await reddit.currentModerator();
+  return moderator ? run(moderator) : toast('Only moderators can use this.');
+}
 
 /** A Reddit username from what a moderator typed, without `u/`, or undefined when it cannot be one. */
 export function cleanUsername(raw: string): string | undefined {
   const name = raw.trim().replace(/^\/?u\//i, '');
   return /^[A-Za-z0-9_-]{3,20}$/.test(name) ? name : undefined;
+}
+
+/** Reads a text field, trimmed; anything that is not a string reads as empty. */
+export function textField(
+  values: Record<string, unknown>,
+  name: string
+): string {
+  const value = values[name];
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+/** Reads a select value, which arrives as a one-element array. */
+export function selected(
+  values: Record<string, unknown>,
+  name: string
+): string {
+  const value = values[name];
+  if (Array.isArray(value)) return typeof value[0] === 'string' ? value[0] : '';
+  return typeof value === 'string' ? value : '';
 }
 
 function gamertag(
@@ -25,9 +68,8 @@ function gamertag(
   return { username: found?.username ?? '', userId: found?.userId ?? '' };
 }
 
-/** The read-only profile card everyone can open, or the moderators' editable version. */
 /** The read-only profile as lines of text, for the form's description. */
-export function profileText(profile: Profile): string {
+function profileText(profile: Profile): string {
   return [
     `r/Fallout76Marketplace karma: ${profile.karma}`,
     `r/Market76 karma: ${profile.m76Karma}`,
@@ -38,6 +80,7 @@ export function profileText(profile: Profile): string {
   ].join('\n');
 }
 
+/** The read-only profile card everyone can open, or the moderators' editable version. */
 export function profileForm(profile: Profile, editable: boolean): Form {
   if (!editable) {
     return {
@@ -133,10 +176,7 @@ export function profileFromForm(
 ): ProfileEdit {
   if (values.deleteProfile === true) return { kind: 'delete' };
 
-  const text = (name: string): string => {
-    const value = values[name];
-    return typeof value === 'string' ? value.trim() : '';
-  };
+  const text = (name: string) => textField(values, name);
   const karma = wholeNumber(values.karma);
   const m76Karma = wholeNumber(values.m76Karma);
   if (karma === undefined || m76Karma === undefined) {
@@ -174,19 +214,6 @@ export function profileFromForm(
     openedKarma: wholeNumber(values.openedKarma),
   };
 }
-
-function day(ms: number): string {
-  return new Date(ms).toISOString().slice(0, 16).replace('T', ' ');
-}
-
-/** `+1`, `-1`, or `±1` for a reward from the old log, which did not record the sign. */
-export function signText(sign: 1 | -1 | 0): string {
-  return sign === 0 ? '±1' : sign > 0 ? '+1' : '-1';
-}
-
-/** `u/name`, or the bare placeholder that stands for a deleted profile. */
-export const LOOKUP_ACTIONS = ['profile', 'edit'] as const;
-export type LookupAction = (typeof LOOKUP_ACTIONS)[number];
 
 export function lookupForm(): Form {
   return {
@@ -232,6 +259,11 @@ export function exportForm(defaultSince: string): Form {
   };
 }
 
+/** `+1`, `-1`, or `±1` for a reward from the old log, which did not record the sign. */
+function signText(sign: 1 | -1 | 0): string {
+  return sign === 0 ? '±1' : sign > 0 ? '+1' : '-1';
+}
+
 /**
  * The wiki text of an export: a header and one line per reward, as a code
  * block. At most `limit` rewards are written; when there are more, the header
@@ -261,41 +293,6 @@ export function exportText(
     shown: shown.length,
     truncated: next !== undefined,
   };
-}
-
-/** Where the last import stands, kept between the hops of the import job. */
-export type ImportStatus = {
-  source: string;
-  state: 'running' | 'done' | 'failed' | 'stopped';
-  rows: number;
-  total: number;
-  /** When the state last changed or a hop last finished. */
-  atMs: number;
-  error?: string;
-};
-
-/** A running import that has not advanced for this long has stopped without saying so. */
-export const IMPORT_STALLED_MS = 3 * 60 * 1000;
-
-export function importStatusText(
-  status: ImportStatus | undefined,
-  nowMs: number
-): string {
-  if (!status) return 'No import has run on this install.';
-  const progress = `${status.rows} of ${status.total} rows from ${status.source}`;
-  const at = `${day(status.atMs)} UTC`;
-  switch (status.state) {
-    case 'done':
-      return `Last import: finished, ${progress}, at ${at}.`;
-    case 'failed':
-      return `Last import: FAILED at ${progress}, at ${at}: ${status.error ?? 'unknown error'}. Start it again with the same source to resume.`;
-    case 'stopped':
-      return `Last import: stopped at ${progress}, at ${at}, because Enabled was turned on. Turn it off and start again to resume.`;
-    case 'running':
-      return nowMs - status.atMs > IMPORT_STALLED_MS
-        ? `Last import: STALLED at ${progress}; no progress since ${at}. Start it again with the same source to resume.`
-        : `An import is running: ${progress}, last progress at ${at}. Starting again restarts the job from where it is.`;
-  }
 }
 
 export function importForm(defaultPage: string, status: string): Form {
@@ -329,14 +326,4 @@ export function importForm(defaultPage: string, status: string): Form {
       },
     ],
   };
-}
-
-/** Reads a select value, which arrives as a one-element array. */
-export function selected(
-  values: Record<string, unknown>,
-  name: string
-): string {
-  const value = values[name];
-  if (Array.isArray(value)) return typeof value[0] === 'string' ? value[0] : '';
-  return typeof value === 'string' ? value : '';
 }

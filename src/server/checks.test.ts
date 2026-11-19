@@ -63,18 +63,11 @@ test('moderators skip every check', () => {
     sign: -1,
     enforceLimits: false,
   });
-});
-
-test('a moderator rewarding themselves still passes', () => {
-  const mod = party('Mod', { isMod: true });
-  const verdict = judgeKarma(
-    snapshot({
-      giver: mod,
-      parent: { author: mod, removed: false, isPost: false },
-    }),
-    config
-  );
-  assert.equal(verdict.kind, 'pass');
+  const self = snapshot({
+    giver: mod,
+    parent: { author: mod, removed: false, isPost: false },
+  });
+  assert.equal(judgeKarma(self, config).kind, 'pass', 'rewarding themselves');
 });
 
 test('a moderator with a deleted parent is refused as removed', () => {
@@ -105,24 +98,19 @@ test('a non-trading post is refused', () => {
   });
 });
 
-test('trading flair match ignores case', () => {
-  const s = snapshot({
-    post: { author: party('Alice'), removed: false, flairText: 'xbox' },
-  });
-  assert.equal(judgeKarma(s, config).kind, 'pass');
-});
-
 test('rewarding yourself is refused, comparing names ignoring case', () => {
   const s = snapshot({ giver: party('ALICE') });
   assert.deepEqual(judgeKarma(s, config), { kind: 'refuse', reason: 'self' });
 });
 
-test('self wins over top-level when the OP commands on their own post', () => {
-  const s = snapshot({
-    giver: party('Alice'),
-    parent: { author: party('Alice'), removed: false, isPost: true },
-  });
-  assert.deepEqual(judgeKarma(s, config), { kind: 'refuse', reason: 'self' });
+test('self wins over top-level when the OP commands on their own post, removed or not', () => {
+  for (const removed of [false, true]) {
+    const s = snapshot({
+      giver: party('Alice'),
+      parent: { author: party('Alice'), removed, isPost: true },
+    });
+    assert.deepEqual(judgeKarma(s, config), { kind: 'refuse', reason: 'self' });
+  }
 });
 
 test('the wrong post type wins over self', () => {
@@ -134,14 +122,6 @@ test('the wrong post type wins over self', () => {
     kind: 'refuse',
     reason: 'wrong-post-type',
   });
-});
-
-test('self wins over a top-level command on removed content', () => {
-  const s = snapshot({
-    giver: party('Alice'),
-    parent: { author: party('Alice'), removed: true, isPost: true },
-  });
-  assert.deepEqual(judgeKarma(s, config), { kind: 'refuse', reason: 'self' });
 });
 
 test('a top-level command is refused', () => {
@@ -257,15 +237,12 @@ test('the daily cap is refused at the cap, not below it', () => {
 
 test('already-rewarded comes before the cap', () => {
   const s = snapshot({ alreadyRewarded: 't1_old', givenToday: 50 });
-  assert.equal(judgeKarma(s, config).kind, 'refuse');
   assert.deepEqual(judgeKarma(s, config), {
     kind: 'refuse',
     reason: 'already-rewarded',
     earlierCommentId: 't1_old',
   });
 });
-
-// ------------------------------------------------------------------ close
 
 function closing(overrides: Partial<CloseSnapshot> = {}): CloseSnapshot {
   return {
@@ -302,14 +279,18 @@ test('someone else cannot close the post', () => {
     kind: 'refuse',
     reason: 'not-op',
   });
-});
-
-test('a non-OP on a non-trading post is refused as not-op', () => {
-  const s = closing({
+  const notTrading = closing({
     author: party('Bob'),
     post: { author: party('Alice'), removed: false, flairText: 'Discussion' },
   });
-  assert.deepEqual(judgeClose(s, config), { kind: 'refuse', reason: 'not-op' });
+  assert.deepEqual(
+    judgeClose(notTrading, config),
+    {
+      kind: 'refuse',
+      reason: 'not-op',
+    },
+    'not-op comes before not-trading'
+  );
 });
 
 test('the OP cannot close a non-trading post', () => {

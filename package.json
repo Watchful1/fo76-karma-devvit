@@ -1,13 +1,21 @@
 {
   "private": true,
   "name": "vault-tectradingco",
+  "description": "The trading karma bot of r/Fallout76Marketplace, as a Reddit Devvit app",
   "version": "0.0.0",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/r-Fallout76Marketplace/fo76-karma-devvit.git"
+  },
   "type": "module",
   "scripts": {
     "build": "vite build",
     "dev": "devvit playtest",
     "lint": "eslint src",
     "login": "devvit login",
+    "logs": "devvit logs Fallout76Marketplace",
+    "release": "devvit publish",
     "prettier": "prettier --write .",
     "test": "node --import tsx --test \"src/**/*.test.ts\"",
     "type-check": "tsc --build",

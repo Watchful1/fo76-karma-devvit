@@ -1,10 +1,11 @@
 // Runs one command comment from start to finish: parse, claim, build the
 // snapshot, judge it, and carry out the verdict through the ports. The order of
-// writes is docs/features.md §3.
+// writes is in docs/features.md, under Giving karma.
 
 import { judgeClose, judgeKarma } from './checks';
-import { parseCommand } from './commands';
-import { flairFor } from './flair';
+import { parseCommand, type CommandInput } from './commands';
+import { refreshFlair } from './flair';
+import { isCommentId } from './ids';
 import {
   closeRefusalText,
   closeSuccessText,
@@ -16,23 +17,13 @@ import {
 import { Roles } from './roles';
 import { utcDayKey } from './time';
 import type {
+  CloseRefusal,
   CommentInfo,
-  Content,
   KarmaRefusal,
-  Party,
   Ports,
   PostInfo,
   ReplyTarget,
 } from './types';
-
-export type CommandSource = 'create' | 'approve' | 'rerun';
-
-export type CommandInput = {
-  commentId: string;
-  source: CommandSource;
-  /** The body from the trigger payload, when there is one: it saves a fetch for the comments that are not commands. */
-  body?: string;
-};
 
 export type Outcome =
   | 'not-a-command'
@@ -45,6 +36,12 @@ export type Outcome =
   | 'closed'
   | 'failed';
 
+/** What handling a command did, with the reason of a refusal and the message of a failure. */
+export type CommandResult =
+  | { outcome: Exclude<Outcome, 'refused' | 'failed'> }
+  | { outcome: 'refused'; reason: KarmaRefusal | CloseRefusal }
+  | { outcome: 'failed'; message: string };
+
 /** One command being handled: what every step needs. */
 type Run = {
   comment: CommentInfo;
@@ -56,17 +53,14 @@ type Run = {
   answeredBefore: boolean;
 };
 
-function content(author: Party | undefined, removed: boolean): Content {
-  return { author, removed };
-}
-
 export async function handleCommand(
   input: CommandInput,
   ports: Ports
-): Promise<Outcome> {
+): Promise<CommandResult> {
   if (input.body !== undefined && parseCommand(input.body) === undefined)
-    return 'not-a-command';
-  if (!ports.config.enabled && input.source !== 'rerun') return 'disabled';
+    return { outcome: 'not-a-command' };
+  if (!ports.config.enabled && input.source !== 'rerun')
+    return { outcome: 'disabled' };
 
   // Where the command is, for the failure message: the id until the comment is fetched.
   const where = { text: input.commentId };
@@ -76,7 +70,7 @@ export async function handleCommand(
     // The claim stays pending, so a moderator's re-run picks the command up again.
     const message = `Command ${where.text} (${input.source}) failed: ${String(error)}`;
     ports.log(message);
-    return 'failed';
+    return { outcome: 'failed', message };
   }
 }
 
@@ -84,32 +78,32 @@ async function runCommand(
   input: CommandInput,
   ports: Ports,
   where: { text: string }
-): Promise<Outcome> {
+): Promise<CommandResult> {
   const { reddit, store, config, log } = ports;
   const rerun = input.source === 'rerun';
 
   const comment = await reddit.getComment(input.commentId);
   where.text = permalinkFor(ports.subredditName, comment.postId, comment.id);
   const kind = parseCommand(comment.body);
-  if (kind === undefined) return 'not-a-command';
+  if (kind === undefined) return { outcome: 'not-a-command' };
 
   const author = comment.authorName;
-  if (author === undefined) return 'skipped';
+  if (author === undefined) return { outcome: 'skipped' };
   const appUsername = await reddit.appUsername();
   if (
     [appUsername.toLowerCase(), 'automoderator'].includes(author.toLowerCase())
   )
-    return 'skipped';
+    return { outcome: 'skipped' };
 
   // A removed command waits, unclaimed, for a moderator's approval to bring it back.
   if (comment.removed) {
     log(`${comment.id} ignored: the command comment is removed`);
-    return 'ignored';
+    return { outcome: 'ignored' };
   }
 
   const claim = await store.claim(comment.id, { takeOver: rerun });
   if (claim === 'busy' || (claim === 'done' && !rerun))
-    return 'already-handled';
+    return { outcome: 'already-handled' };
   log(
     `${kind} by u/${author} on ${comment.id} (${input.source}${claim === 'resumed' ? ', resuming' : ''})`
   );
@@ -134,17 +128,17 @@ async function step(name: string, call: () => Promise<void>): Promise<void> {
   }
 }
 
-async function closePost(run: Run): Promise<Outcome> {
+async function closePost(run: Run): Promise<CommandResult> {
   const { comment, author, post, roles, ports } = run;
   const { reddit, store, config } = ports;
   const verdict = judgeClose(
     {
       author: await roles.party(author),
       post: {
-        ...content(
-          post.authorName ? await roles.party(post.authorName) : undefined,
-          post.removed
-        ),
+        author: post.authorName
+          ? await roles.party(post.authorName)
+          : undefined,
+        removed: post.removed,
         flairText: post.flairText,
       },
     },
@@ -159,7 +153,7 @@ async function closePost(run: Run): Promise<Outcome> {
       closeRefusalText(verdict.reason)
     );
     await store.finish(comment.id);
-    return 'refused';
+    return { outcome: 'refused', reason: verdict.reason };
   }
 
   await step('setting the Trade Closed flair', () =>
@@ -175,14 +169,17 @@ async function closePost(run: Run): Promise<Outcome> {
     );
   }
   await store.finish(comment.id);
-  return 'closed';
+  return { outcome: 'closed' };
 }
 
-async function giveKarma(kind: 'give' | 'take', run: Run): Promise<Outcome> {
+async function giveKarma(
+  kind: 'give' | 'take',
+  run: Run
+): Promise<CommandResult> {
   const { comment, author, post, roles, ports } = run;
   const { reddit, store, config, now } = ports;
 
-  const parentIsPost = !comment.parentId.startsWith('t1_');
+  const parentIsPost = !isCommentId(comment.parentId);
   const parentComment = parentIsPost
     ? undefined
     : await reddit.getComment(comment.parentId);
@@ -213,13 +210,17 @@ async function giveKarma(kind: 'give' | 'take', run: Run): Promise<Outcome> {
       kind,
       giver,
       parent: {
-        ...content(
-          parentAuthor,
-          parentIsPost ? post.removed : (parentComment?.removed ?? false)
-        ),
+        author: parentAuthor,
+        removed: parentIsPost
+          ? post.removed
+          : (parentComment?.removed ?? false),
         isPost: parentIsPost,
       },
-      post: { ...content(postAuthor, post.removed), flairText: post.flairText },
+      post: {
+        author: postAuthor,
+        removed: post.removed,
+        flairText: post.flairText,
+      },
       alreadyRewarded:
         giver.isMod || !parentAuthorName
           ? undefined
@@ -298,7 +299,7 @@ async function refuse(
   reason: KarmaRefusal,
   receiver: string | undefined,
   earlierCommentId?: string
-): Promise<Outcome> {
+): Promise<CommandResult> {
   const { comment, author, post, ports } = run;
   ports.log(`${comment.id} refused: ${reason}`);
   const text = karmaRefusalText(reason, {
@@ -316,7 +317,7 @@ async function refuse(
   });
   await reply(ports, { kind: 'comment', id: comment.id }, post.id, text);
   await ports.store.finish(comment.id);
-  return 'refused';
+  return { outcome: 'refused', reason };
 }
 
 /**
@@ -329,21 +330,16 @@ async function afterReward(
   receiver: string,
   sign: 1 | -1,
   options: { reply: boolean }
-): Promise<Outcome> {
+): Promise<CommandResult> {
   const { comment, author, post, roles, ports } = run;
-  const { reddit, store, config } = ports;
   const link = permalinkFor(ports.subredditName, post.id, comment.id);
 
   try {
-    const flair = flairFor(
-      await store.loadProfile(receiver),
-      await roles.party(receiver),
-      config.templates
-    );
-    await reddit.setUserFlair(receiver, flair.text, flair.templateId);
+    await refreshFlair(ports, receiver, roles);
   } catch (error) {
-    const message = `The karma at ${link} is recorded, but the flair of u/${receiver} could not be set: ${String(error)}. Re-run the command to set it.`;
-    ports.log(message);
+    ports.log(
+      `The karma at ${link} is recorded, but the flair of u/${receiver} could not be set: ${String(error)}. Re-run the command to set it.`
+    );
   }
 
   if (options.reply) {
@@ -355,8 +351,8 @@ async function afterReward(
     );
   }
 
-  await store.finish(comment.id);
-  return 'rewarded';
+  await ports.store.finish(comment.id);
+  return { outcome: 'rewarded' };
 }
 
 /** Replies under the comment, or under the post when the comment can't take a reply. */

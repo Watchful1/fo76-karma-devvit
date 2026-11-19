@@ -3,9 +3,9 @@
 import type { Config } from './types';
 
 /** The raw values a settings reader returns: strings, numbers, booleans, or arrays for selects. */
-export type RawSettings = Record<string, unknown>;
+type RawSettings = Record<string, unknown>;
 
-export const DEFAULTS: Config = {
+const DEFAULTS: Config = {
   enabled: false,
   dailyCap: 10,
   tradingFlairs: ['XBOX', 'PlayStation', 'PC'],

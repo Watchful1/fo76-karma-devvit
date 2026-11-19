@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
-import { configFrom, DEFAULTS } from './settings';
+import { configFrom } from './settings';
 
 const DISCLAIMER =
   'https://www.reddit.com/user/Vault-TecTradingCo/comments/lkllre/disclaimer_for_rfallout76marketplace/';
@@ -22,11 +22,6 @@ test('empty settings give these literal defaults', () => {
     courierPage: 'custom_bot_config/courier_list',
     disclaimerUrl: DISCLAIMER,
   });
-});
-
-test('the app is off until a moderator turns it on', () => {
-  assert.equal(configFrom({}).enabled, false);
-  assert.equal(DEFAULTS.enabled, false);
 });
 
 test('strings are trimmed and blank strings fall back', () => {
@@ -87,8 +82,6 @@ test('booleans are honoured and other types fall back', () => {
   assert.equal(configFrom({ enabled: 1 }).enabled, false);
 });
 
-// ------------------------------------------------------------ devvit.json
-
 type SettingDef = { type: string; defaultValue?: unknown };
 const manifest = JSON.parse(
   readFileSync(new URL('../../devvit.json', import.meta.url), 'utf8')
@@ -124,14 +117,6 @@ test('the devvit.json default values agree with the defaults', () => {
   );
   assert.equal(fromManifest('courierPage'), defaults.courierPage);
   assert.equal(fromManifest('disclaimerUrl'), defaults.disclaimerUrl);
-  // The template ids are the old bot's, the same in the manifest and in the code.
-  assert.deepEqual(defaults.templates, {
-    modsAndCouriers: '51524056-4a4d-11eb-814b-0e7b734c1fd5',
-    tier0: '3c680234-4a4d-11eb-8124-0edd2b620987',
-    tier50: '2624bc6a-4a4d-11eb-8b7c-0e6968d78889',
-    tier100: '0467e0de-4a4d-11eb-9453-0e4e6fcf2865',
-    tradeClosed: '1e0c3870-a456-11ea-aa7a-0ee73ab9d31f',
-  });
   assert.equal(
     fromManifest('templateModsAndCouriers'),
     defaults.templates.modsAndCouriers

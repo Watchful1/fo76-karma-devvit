@@ -1,20 +1,14 @@
-// An in-memory stand-in for the Devvit Redis client, with just what the store uses.
+// An in-memory stand-in for the Devvit Redis client: what the store uses, and
+// two readers for tests.
 
 import type { RedisPort, RedisTxPort } from '../store';
+import type { ImportedReward } from '../types';
 
 type ZMember = { member: string; score: number };
 type ZRangeOptions = {
-  reverse?: boolean;
-  by: 'score' | 'lex' | 'rank';
+  by: 'score' | 'rank';
   limit?: { offset: number; count: number };
 };
-
-function globToRegExp(pattern: string): RegExp {
-  const escaped = pattern
-    .replace(/[.+?^${}()|[\]\\]/g, '\\$&')
-    .replace(/\*/g, '.*');
-  return new RegExp(`^${escaped}$`, 's');
-}
 
 function parseBound(bound: number | string): number {
   if (typeof bound === 'number') return bound;
@@ -30,8 +24,6 @@ export class FakeRedis implements RedisPort {
   private readonly expiries = new Map<string, number>();
   private readonly versions = new Map<string, number>();
 
-  /** What `exec()` returns for a discarded transaction. */
-  discardedShape: 'empty' | 'null' = 'empty';
   /** Runs once at the start of the next `exec()`, to simulate another request writing in between. */
   beforeExec: (() => Promise<void>) | undefined;
 
@@ -40,6 +32,9 @@ export class FakeRedis implements RedisPort {
   version(key: string): number {
     return this.versions.get(key) ?? 0;
   }
+
+  /** What `exec()` returns for a discarded transaction: the store accepts either. */
+  discardedAs: [] | null = [];
 
   /** Marks a key as written, so transactions watching it are discarded. */
   private touch(key: string): void {
@@ -95,11 +90,11 @@ export class FakeRedis implements RedisPort {
   async set(
     key: string,
     value: string,
-    options?: { nx?: boolean; xx?: boolean; expiration?: Date }
+    options?: { nx?: boolean; expiration?: Date }
   ): Promise<string> {
     this.live(key);
     const exists = this.strings.has(key);
-    if ((options?.nx && exists) || (options?.xx && !exists)) return '';
+    if (options?.nx && exists) return '';
     this.strings.set(key, value);
     if (options?.expiration)
       this.expiries.set(key, options.expiration.getTime());
@@ -153,23 +148,18 @@ export class FakeRedis implements RedisPort {
           (a.member < b.member ? -1 : a.member > b.member ? 1 : 0)
       );
     if (options?.by === 'score') {
-      // As in Redis, a reversed range by score takes the larger bound first.
-      const [low, high] = options.reverse
-        ? [parseBound(stop), parseBound(start)]
-        : [parseBound(start), parseBound(stop)];
+      const [low, high] = [parseBound(start), parseBound(stop)];
       const inRange = sorted.filter(
         (row) => row.score >= low && row.score <= high
       );
-      if (options.reverse) inRange.reverse();
       // The real client sends count 1000 when a range by score has no limit.
       const limit = options.limit ?? { offset: 0, count: 1000 };
       return inRange.slice(limit.offset, limit.offset + limit.count);
     }
-    const rows = options?.reverse ? sorted.reverse() : sorted;
     const from =
-      Number(start) < 0 ? rows.length + Number(start) : Number(start);
-    const to = Number(stop) < 0 ? rows.length + Number(stop) : Number(stop);
-    return rows.slice(Math.max(from, 0), to + 1);
+      Number(start) < 0 ? sorted.length + Number(start) : Number(start);
+    const to = Number(stop) < 0 ? sorted.length + Number(stop) : Number(stop);
+    return sorted.slice(Math.max(from, 0), to + 1);
   }
 
   async zRem(key: string, members: string[]): Promise<number> {
@@ -230,31 +220,22 @@ export class FakeRedis implements RedisPort {
     return next;
   }
 
-  /**
-   * Pages through the hash `count` fields at a time, the cursor being the
-   * position of the next page; the pattern filters within a page, as in Redis.
-   * Without a count everything comes back in one page.
-   */
-  async hScan(
-    key: string,
-    cursor: number,
-    pattern?: string,
-    count?: number
-  ): Promise<{
-    cursor: number;
-    fieldValues: { field: string; value: string }[];
-  }> {
+  /** Every field of a hash, for a test to compare. */
+  async hGetAll(key: string): Promise<Record<string, string>> {
     this.live(key);
-    const matcher = pattern === undefined ? undefined : globToRegExp(pattern);
-    const all = [...(this.hashes.get(key) ?? [])];
-    const size = count ?? all.length;
-    const fieldValues = all
-      .slice(cursor, cursor + size)
-      .filter(([field]) => matcher === undefined || matcher.test(field))
-      .map(([field, value]) => ({ field, value }));
-    const next = cursor + size;
-    return { cursor: next >= all.length ? 0 : next, fieldValues };
+    return Object.fromEntries(this.hashes.get(key) ?? []);
   }
+}
+
+/** The reward entries of a user's history, oldest first, read from the store's `history:` key. */
+export async function historyOf(
+  redis: FakeRedis,
+  username: string
+): Promise<ImportedReward[]> {
+  const rows = await redis.zRange(`history:${username.toLowerCase()}`, 0, -1, {
+    by: 'rank',
+  });
+  return rows.map((row) => JSON.parse(row.member) as ImportedReward);
 }
 
 class FakeTx implements RedisTxPort {
@@ -281,19 +262,15 @@ class FakeTx implements RedisTxPort {
     return this;
   }
 
-  /** Applies the queue unless a watched key changed since `watch`, in which case it returns the discarded shape. */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  async exec(): Promise<any[]> {
+  /** Applies the queue unless a watched key changed since `watch`, in which case it returns no replies. */
+  async exec(): Promise<unknown[] | null> {
     const hook = this.redis.beforeExec;
     this.redis.beforeExec = undefined;
     if (hook) await hook();
     const queue = this.queue ?? [];
     this.queue = undefined;
     for (const [key, version] of this.watched) {
-      if (this.redis.version(key) !== version) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        return this.redis.discardedShape === 'null' ? (null as any) : [];
-      }
+      if (this.redis.version(key) !== version) return this.redis.discardedAs;
     }
     const results: unknown[] = [];
     for (const command of queue) results.push(await command());
