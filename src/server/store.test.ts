@@ -3,7 +3,8 @@ import { test } from 'node:test';
 
 import { DAY_MS } from './time';
 import { IN_FLIGHT_MS, Store } from './store';
-import { FakeRedis, historyOf } from './testing/fake-redis';
+import { eventsOf, FakeRedis, historyOf } from './testing/fake-redis';
+import { seedGivenToday, seedOldReward, seedProfile } from './testing/seed';
 import {
   emptyProfile,
   type ImportedReward,
@@ -35,7 +36,8 @@ function reward(overrides: Partial<Reward> = {}): Reward {
   };
 }
 
-function imported(
+/** A reward from the old bot's log, which has no sign. */
+function oldReward(
   commentId: string,
   giver: string,
   receiver: string
@@ -56,15 +58,15 @@ async function trades(redis: FakeRedis, name: string): Promise<string[]> {
   );
 }
 
-test('an imported profile loads back, and an unknown user is empty', async () => {
-  const { store } = setup();
+test('a stored profile loads back, and an unknown user is empty', async () => {
+  const { redis, store } = setup();
   const profile: Profile = {
     redditUsername: 'Bob',
     karma: 12,
     m76Karma: 5,
     gamertags: [{ platform: 'PC', username: 'bobby', userId: '1' }],
   };
-  await store.importBatch({ profiles: [profile], rewards: [] });
+  await seedProfile(redis, profile);
   assert.deepEqual(await store.loadProfile('bob'), profile);
   assert.deepEqual(await store.loadProfile('Nobody'), emptyProfile('Nobody'));
 });
@@ -79,11 +81,8 @@ test('karma alone is enough to load a profile', async () => {
 });
 
 test('saveDetails changes the gamertags and Market76 karma but not the karma', async () => {
-  const { store } = setup();
-  await store.importBatch({
-    profiles: [{ ...emptyProfile('Bob'), karma: 5 }],
-    rewards: [],
-  });
+  const { redis, store } = setup();
+  await seedProfile(redis, { ...emptyProfile('Bob'), karma: 5 });
   const details: Profile = {
     redditUsername: 'Bob',
     karma: 99,
@@ -105,16 +104,11 @@ test('addKarma adds to the current value and returns it', async () => {
 
 test('deleting a profile removes it, its history and the pairs on both sides', async () => {
   const { redis, store } = setup();
-  await store.importBatch({
-    profiles: [
-      {
-        redditUsername: 'Bob',
-        karma: 3,
-        m76Karma: 40,
-        gamertags: [{ platform: 'PC', username: 'bobby', userId: '1' }],
-      },
-    ],
-    rewards: [],
+  await seedProfile(redis, {
+    redditUsername: 'Bob',
+    karma: 3,
+    m76Karma: 40,
+    gamertags: [{ platform: 'PC', username: 'bobby', userId: '1' }],
   });
   await store.recordReward(reward({ commentId: 'c1' }), enforce);
   await store.recordReward(
@@ -180,7 +174,7 @@ test('deleting a profile puts a placeholder for the name in partners histories a
     `${placeholder}>Carol`,
     'Alice>Carol',
   ]);
-  const events = await store.eventsSince(0, 100);
+  const events = await eventsOf(redis);
   assert.deepEqual(
     events.map((event) => [
       event.commentId,
@@ -203,16 +197,11 @@ test('deleting a profile puts a placeholder for the name in partners histories a
   );
 });
 
-test('deleting a profile renames and unpairs imported rewards too', async () => {
+test('deleting a profile renames and unpairs rewards from the old bot too', async () => {
   const { redis, store } = setup();
-  await store.importBatch({
-    profiles: [],
-    rewards: [
-      imported('i1', 'Bob', 'Carol'),
-      imported('i2', 'Dana', 'Bob'),
-      imported('i3', 'Dana', 'Carol'),
-    ],
-  });
+  await seedOldReward(redis, oldReward('i1', 'Bob', 'Carol'));
+  await seedOldReward(redis, oldReward('i2', 'Dana', 'Bob'));
+  await seedOldReward(redis, oldReward('i3', 'Dana', 'Carol'));
 
   const placeholder = await store.deleteProfile('bob');
 
@@ -223,7 +212,7 @@ test('deleting a profile renames and unpairs imported rewards too', async () => 
     (await trades(redis, 'Carol')).sort(),
     [`${placeholder}>Carol`, 'Dana>Carol'].sort()
   );
-  const events = await store.eventsSince(0, 10);
+  const events = await eventsOf(redis);
   const i1 = events.find((event) => event.commentId === 'i1');
   assert.equal(i1?.giver, placeholder);
   assert.equal(i1?.sign, 0);
@@ -240,7 +229,7 @@ test('deleting a profile skips history entries that are not rewards', async () =
   const placeholder = await store.deleteProfile('Bob');
 
   assert.deepEqual(await trades(redis, 'Alice'), [`Alice>${placeholder}`]);
-  assert.equal((await store.eventsSince(0, 10)).length, 1);
+  assert.equal((await eventsOf(redis)).length, 1);
 });
 
 test('a deletion that failed half way finishes with the same placeholder and no duplicates', async () => {
@@ -275,7 +264,7 @@ test('a deletion that failed half way finishes with the same placeholder and no 
     await trades(redis, 'Alice'),
     'the second run changed nothing in the partner history'
   );
-  assert.equal((await store.eventsSince(0, 100)).length, 2);
+  assert.equal((await eventsOf(redis)).length, 2);
   assert.deepEqual(await historyOf(redis, 'Bob'), []);
 });
 
@@ -291,7 +280,7 @@ test('deleting two users who traded with each other leaves two placeholders and 
   const alice = await store.deleteProfile('Alice');
 
   assert.notEqual(bob, alice);
-  const events = await store.eventsSince(0, 100);
+  const events = await eventsOf(redis);
   assert.deepEqual(
     events.map((event) => `${event.giver}>${event.receiver}`).sort(),
     [`${alice}>${bob}`, `${bob}>${bob}`].sort()
@@ -323,7 +312,7 @@ test('a user with more partners than one group of writes is renamed everywhere',
       undefined
     );
   }
-  assert.equal((await store.eventsSince(0, 100)).length, 60);
+  assert.equal((await eventsOf(redis)).length, 60);
 });
 
 test('claim: the first caller claims, the second is busy and finishing makes it done', async () => {
@@ -393,7 +382,7 @@ test('recording a reward changes karma, the day count, events and both histories
   assert.equal(await store.givenToday('alice', DAY), 1);
   assert.equal(await store.earlierReward('p1', 'ALICE', 'bob'), 'c1');
   assert.deepEqual(await store.recordedReward('c1'), reward());
-  assert.deepEqual(await store.eventsSince(0, 1000), [reward()]);
+  assert.deepEqual(await eventsOf(redis), [reward()]);
   const entry = { kind: 'reward', ...reward() };
   assert.deepEqual(await historyOf(redis, 'Alice'), [entry]);
   assert.deepEqual(await historyOf(redis, 'Bob'), [entry]);
@@ -405,21 +394,17 @@ test('a take lowers karma', async () => {
   assert.equal(await karmaOf(store, 'Bob'), -1);
 });
 
-test('the day count, recorded or set, expires after two days', async () => {
+test('the day count expires after two days', async () => {
   const { clock, store } = setup();
   await store.recordReward(reward(), enforce);
-  await store.setGivenToday('Carol', DAY, 7);
-  assert.equal(await store.givenToday('carol', DAY), 7);
   clock.now += 47 * HOUR;
   assert.equal(await store.givenToday('Alice', DAY), 1);
-  assert.equal(await store.givenToday('Carol', DAY), 7);
   clock.now += 2 * HOUR;
   assert.equal(await store.givenToday('Alice', DAY), 0);
-  assert.equal(await store.givenToday('Carol', DAY), 0);
 });
 
 test('a second reward for the same pair is refused with the first comment id', async () => {
-  const { store } = setup();
+  const { redis, store } = setup();
   await store.recordReward(reward({ commentId: 'c1' }), enforce);
   const second = await store.recordReward(
     reward({ commentId: 'c2', atMs: T0 + 1 }),
@@ -431,12 +416,12 @@ test('a second reward for the same pair is refused with the first comment id', a
   });
   assert.equal(await karmaOf(store, 'Bob'), 1);
   assert.equal(await store.givenToday('Alice', DAY), 1);
-  assert.equal((await store.eventsSince(0, 1000)).length, 1);
+  assert.equal((await eventsOf(redis)).length, 1);
   assert.equal(await store.recordedReward('c2'), undefined);
 });
 
 test('without limits the same pair records with each new comment, and no comment twice', async () => {
-  const { store } = setup();
+  const { redis, store } = setup();
   const first = reward({ commentId: 'c1' });
   const second = reward({ commentId: 'c2', atMs: T0 + 1 });
   assert.equal((await store.recordReward(first, loose)).kind, 'recorded');
@@ -452,7 +437,7 @@ test('without limits the same pair records with each new comment, and no comment
     kind: 'already-recorded',
   });
   assert.equal(await karmaOf(store, 'Bob'), 2);
-  assert.equal((await store.eventsSince(0, 1000)).length, 2);
+  assert.equal((await eventsOf(redis)).length, 2);
 });
 
 test('giving karma to oneself writes a single history entry', async () => {
@@ -472,17 +457,17 @@ test('a comment records once, with or without limits', async () => {
     });
     assert.equal(await karmaOf(store, 'Bob'), 1);
     assert.equal(await store.givenToday('Alice', DAY), 1);
-    assert.equal((await store.eventsSince(0, 1000)).length, 1);
+    assert.equal((await eventsOf(redis)).length, 1);
     assert.equal((await historyOf(redis, 'Bob')).length, 1);
   }
 });
 
-test('an imported reward is already recorded, with or without limits', async () => {
+test('a reward from the old bot is already recorded, with or without limits', async () => {
   for (const options of [loose, enforce]) {
-    const { store } = setup();
-    await store.importBatch({
-      profiles: [],
-      rewards: [{ ...imported('c1', 'Alice', 'Bob'), atMs: T0 - 5000 }],
+    const { redis, store } = setup();
+    await seedOldReward(redis, {
+      ...oldReward('c1', 'Alice', 'Bob'),
+      atMs: T0 - 5000,
     });
     assert.equal(await store.recordedReward('c1'), undefined);
     assert.deepEqual(await store.recordReward(reward(), options), {
@@ -490,13 +475,13 @@ test('an imported reward is already recorded, with or without limits', async () 
     });
     assert.equal(await karmaOf(store, 'Bob'), 0);
     assert.equal(await store.givenToday('Alice', DAY), 0);
-    assert.equal((await store.eventsSince(0, 1000)).length, 1);
+    assert.equal((await eventsOf(redis)).length, 1);
   }
 });
 
 test('at the daily cap nothing is written; without limits it records', async () => {
   const { redis, store } = setup();
-  await store.setGivenToday('Alice', DAY, CAP);
+  await seedGivenToday(redis, 'Alice', DAY, CAP);
 
   assert.deepEqual(await store.recordReward(reward(), enforce), {
     kind: 'cap',
@@ -505,7 +490,7 @@ test('at the daily cap nothing is written; without limits it records', async () 
   assert.equal(await store.givenToday('Alice', DAY), CAP);
   assert.equal(await store.earlierReward('p1', 'Alice', 'Bob'), undefined);
   assert.equal(await store.recordedReward('c1'), undefined);
-  assert.deepEqual(await store.eventsSince(0, 1000), []);
+  assert.deepEqual(await eventsOf(redis), []);
   assert.deepEqual(await historyOf(redis, 'Alice'), []);
 
   assert.deepEqual(await store.recordReward(reward(), loose), {
@@ -516,8 +501,8 @@ test('at the daily cap nothing is written; without limits it records', async () 
 });
 
 test('one below the cap records and reaches it', async () => {
-  const { store } = setup();
-  await store.setGivenToday('Alice', DAY, CAP - 1);
+  const { redis, store } = setup();
+  await seedGivenToday(redis, 'Alice', DAY, CAP - 1);
   assert.deepEqual(await store.recordReward(reward(), enforce), {
     kind: 'recorded',
   });
@@ -525,8 +510,8 @@ test('one below the cap records and reaches it', async () => {
 });
 
 test('two concurrent rewards from a giver one below the cap give one reward and one cap', async () => {
-  const { store } = setup();
-  await store.setGivenToday('Alice', DAY, CAP - 1);
+  const { redis, store } = setup();
+  await seedGivenToday(redis, 'Alice', DAY, CAP - 1);
 
   const results = await Promise.all([
     store.recordReward(reward({ commentId: 'c1', receiver: 'Bob' }), enforce),
@@ -542,7 +527,7 @@ test('two concurrent rewards from a giver one below the cap give one reward and 
     (await karmaOf(store, 'Bob')) + (await karmaOf(store, 'Carol')),
     1
   );
-  assert.equal((await store.eventsSince(0, 1000)).length, 1);
+  assert.equal((await eventsOf(redis)).length, 1);
 });
 
 test('two concurrent rewards for the same pair with different comments give one reward', async () => {
@@ -616,7 +601,7 @@ test('a discard caused by an unrelated write is retried and records once', async
   });
   assert.equal(hookRuns, 1, 'the first attempt was discarded');
   assert.equal(await karmaOf(store, 'Bob'), 1);
-  assert.equal((await store.eventsSince(0, 1000)).length, 1);
+  assert.equal((await eventsOf(redis)).length, 1);
   assert.equal(await store.givenToday('Alice', DAY), 1);
 });
 
@@ -652,7 +637,7 @@ test('a race lost four times throws and writes nothing', async () => {
   assert.equal(await karmaOf(store, 'Bob'), 0);
   assert.equal(await store.givenToday('Alice', DAY), 0);
   assert.equal(await store.recordedReward('c1'), undefined);
-  assert.deepEqual(await store.eventsSince(0, 1000), []);
+  assert.deepEqual(await eventsOf(redis), []);
 });
 
 test('two rewards at the same millisecond both stay in the history', async () => {
@@ -660,131 +645,4 @@ test('two rewards at the same millisecond both stay in the history', async () =>
   await store.recordReward(reward({ commentId: 'c1', postId: 'p1' }), enforce);
   await store.recordReward(reward({ commentId: 'c2', postId: 'p2' }), enforce);
   assert.equal((await historyOf(redis, 'Bob')).length, 2);
-});
-
-test('eventsSince returns rewards from the given time, oldest first', async () => {
-  const { store } = setup();
-  for (const i of [2, 1, 3]) {
-    await store.recordReward(
-      reward({ commentId: `c${i}`, postId: `p${i}`, atMs: T0 + i * 1000 }),
-      enforce
-    );
-  }
-  const since = await store.eventsSince(T0 + 2000, 1000);
-  assert.deepEqual(
-    since.map((r) => r.commentId),
-    ['c2', 'c3']
-  );
-  assert.equal((await store.eventsSince(0, 1000)).length, 3);
-});
-
-test('eventsSince reads past one page of 1000, oldest first, and respects the limit', async () => {
-  const { store } = setup();
-  const rewards: ImportedReward[] = [];
-  for (let i = 0; i < 1200; i++) {
-    rewards.push({
-      commentId: `c${i}`,
-      postId: `p${i}`,
-      giver: `giver${i % 50}`,
-      receiver: `receiver${i}`,
-      sign: 1,
-      atMs: T0 + i,
-    });
-  }
-  await store.importBatch({ profiles: [], rewards });
-
-  const all = await store.eventsSince(0, 5000);
-  assert.equal(all.length, 1200);
-  assert.deepEqual(
-    all.map((event) => event.atMs),
-    rewards.map((event) => event.atMs),
-    'oldest first, none missing'
-  );
-
-  const some = await store.eventsSince(0, 1100);
-  assert.equal(some.length, 1100);
-  assert.equal(some[1099]?.commentId, 'c1099');
-
-  assert.equal((await store.eventsSince(0, 50)).length, 50);
-  assert.equal((await store.eventsSince(T0 + 1150, 5000)).length, 50);
-  assert.deepEqual(await store.eventsSince(0, 0), []);
-});
-
-test('import progress starts empty and is stored', async () => {
-  const { store } = setup();
-  assert.deepEqual(await store.importProgress(), { rows: 0, done: false });
-  await store.setImportProgress({ rows: 1000, done: true });
-  assert.deepEqual(await store.importProgress(), { rows: 1000, done: true });
-});
-
-test('importing a batch', async (t) => {
-  const { redis, store } = setup();
-  const profiles: Profile[] = [
-    { redditUsername: 'Alice', karma: 7, m76Karma: 2, gamertags: [] },
-    {
-      redditUsername: 'Bob',
-      karma: -2,
-      m76Karma: 0,
-      gamertags: [{ platform: 'XBOX', username: 'b', userId: '9' }],
-    },
-  ];
-  const rewards: ImportedReward[] = [
-    { ...imported('c1', 'Alice', 'Bob'), atMs: T0 + 1 },
-    { ...imported('c2', 'Alice', 'Bob'), atMs: T0 + 2 },
-    { ...imported('c3', 'Dana', 'Alice'), postId: 'p2', sign: 1, atMs: T0 + 3 },
-  ];
-  await store.importBatch({ profiles, rewards });
-  const state = async () => ({
-    alice: await store.loadProfile('Alice'),
-    bob: await store.loadProfile('Bob'),
-    pair: await store.earlierReward('p1', 'Alice', 'Bob'),
-    events: await store.eventsSince(0, 1000),
-    aliceHistory: await historyOf(redis, 'Alice'),
-    bobHistory: await historyOf(redis, 'Bob'),
-    danaHistory: await historyOf(redis, 'Dana'),
-  });
-  const first = await state();
-
-  await t.test('writes the profiles with their karma', () => {
-    assert.deepEqual([first.alice, first.bob], profiles);
-  });
-
-  await t.test('keeps the last reward of a duplicate pair in the index', () => {
-    assert.equal(first.pair, 'c2');
-  });
-
-  await t.test('puts every reward in the events and in both histories', () => {
-    assert.equal(first.events.length, 3);
-    assert.equal(first.aliceHistory.length, 3);
-    assert.equal(first.bobHistory.length, 2);
-    assert.equal(first.danaHistory.length, 1);
-  });
-
-  await t.test('leaves the day counts alone', async () => {
-    assert.equal(await store.givenToday('Alice', DAY), 0);
-  });
-
-  await t.test('a second time changes nothing', async () => {
-    await store.importBatch({ profiles, rewards });
-    assert.deepEqual(await state(), first);
-  });
-});
-
-test('an empty batch writes nothing', async () => {
-  const { store } = setup();
-  await store.importBatch({ profiles: [], rewards: [] });
-  assert.deepEqual(await store.eventsSince(0, 1000), []);
-});
-
-test('a batch of rewards with more history sets than one parallel group imports them all', async () => {
-  const { redis, store } = setup();
-  const rewards: ImportedReward[] = [];
-  for (let i = 0; i < 60; i++)
-    rewards.push({
-      ...imported(`c${i}`, `giver${i}`, `receiver${i}`),
-      sign: 1,
-    });
-  await store.importBatch({ profiles: [], rewards });
-  for (const name of ['giver0', 'receiver0', 'giver59', 'receiver59'])
-    assert.equal((await historyOf(redis, name)).length, 1, name);
 });

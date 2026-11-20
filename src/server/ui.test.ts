@@ -2,12 +2,9 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { FakeReddit } from './testing/fake-reddit';
-import type { ImportedReward, Profile } from './types';
+import type { Profile } from './types';
 import {
   cleanUsername,
-  exportForm,
-  exportText,
-  importForm,
   KARMA_LIMIT,
   lookupForm,
   moderatorOnly,
@@ -15,10 +12,7 @@ import {
   profileFromForm,
   selected,
   toast,
-  wikiPageUrl,
 } from './ui';
-
-const AT = Date.UTC(2027, 0, 15, 8, 30);
 
 type Field = {
   name: string;
@@ -276,89 +270,13 @@ test('openedKarma is read from its string, and is undefined when absent or junk'
   assert.equal(opened(''), undefined);
 });
 
-const exported = (i: number, sign: 1 | -1 | 0 = 1): ImportedReward => ({
-  commentId: `t1_c${i}`,
-  postId: `t3_p${i}`,
-  giver: `giver${i}`,
-  receiver: `recv${i}`,
-  sign,
-  atMs: AT + i * 1000,
-});
-
-test('exportText for a complete export is a header and a table indented four spaces', () => {
-  const out = exportText([exported(1), exported(2)], AT, 2);
-  assert.equal(out.shown, 2);
-  assert.equal(out.truncated, false, 'exactly at the limit');
-  assert.deepEqual(out.text.split('\n'), [
-    `All 2 rewards since ${new Date(AT).toISOString()}.`,
-    '',
-    '    time | sign | giver | receiver | post | comment',
-    `    ${new Date(AT + 1000).toISOString()} | +1 | giver1 | recv1 | t3_p1 | t1_c1`,
-    `    ${new Date(AT + 2000).toISOString()} | +1 | giver2 | recv2 | t3_p2 | t1_c2`,
-  ]);
-
-  const none = exportText([], AT, 10);
-  assert.equal(none.shown, 0);
-  assert.match(none.text, /^All 0 rewards since /);
-});
-
-test('exportText for a truncated export names the first reward not shown', () => {
-  const rewards = [1, 2, 3, 4, 5].map((i) => exported(i));
-  const out = exportText(rewards, AT, 3);
-  assert.equal(out.shown, 3);
-  assert.equal(out.truncated, true);
-  const lines = out.text.split('\n');
-  assert.match(lines[0]!, /^The first 3 rewards since /);
-  assert.ok(
-    lines[0]!.includes(new Date(rewards[3]!.atMs).toISOString()),
-    'names the time of the fourth reward'
-  );
-  assert.equal(lines.length, 3 + 3, 'exactly limit reward lines');
-  assert.ok(out.text.includes('giver3'));
-  assert.ok(!out.text.includes('giver4'));
-});
-
-test('exportText renders each sign, and ±1 for an imported reward', () => {
-  const out = exportText(
-    [exported(1, 1), exported(2, -1), exported(3, 0)],
-    AT,
-    10
-  );
-  const signs = out.text
-    .split('\n')
-    .slice(3)
-    .map((line) => line.split(' | ')[1]);
-  assert.deepEqual(signs, ['+1', '-1', '±1']);
-});
-
-test('the lookup, export and import forms have the fields their submit handlers read', () => {
+test('the lookup form has the fields its submit handler reads', () => {
   const lookup = fieldMap(lookupForm());
   assert.deepEqual([...lookup.keys()], ['username', 'action']);
   assert.deepEqual(lookup.get('action')?.defaultValue, ['profile']);
   assert.deepEqual(
     lookup.get('action')?.options?.map((option) => option.value),
     ['profile', 'edit']
-  );
-
-  const exporting = fieldMap(exportForm('2027-01-01'));
-  assert.deepEqual([...exporting.keys()], ['since']);
-  assert.equal(exporting.get('since')?.defaultValue, '2027-01-01');
-
-  const form = importForm('wiki/page', 'STATUS LINE.');
-  assert.match(form.description ?? '', /^STATUS LINE\. /);
-  const importing = fieldMap(form);
-  assert.deepEqual([...importing.keys()], ['source', 'page', 'again']);
-  assert.deepEqual(
-    importing.get('source')?.options?.map((option) => option.value),
-    ['bundled', 'wiki']
-  );
-  assert.equal(importing.get('page')?.defaultValue, 'wiki/page');
-});
-
-test('wikiPageUrl keeps the slashes of a nested page', () => {
-  assert.equal(
-    wikiPageUrl('testsub', 'karma-export/20261115-0341'),
-    'https://old.reddit.com/r/testsub/wiki/karma-export/20261115-0341'
   );
 });
 

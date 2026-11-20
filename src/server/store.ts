@@ -3,14 +3,14 @@
 // - `karma` (hash): username to karma.
 // - `profiles` (hash): username to the Market76 karma and gamertags, as JSON.
 // - `rewards` (hash): `<postId>|<giver>|<receiver>` to the comment id of the
-//   reward, for the once-per-pair rule. Imported rewards are here too.
+//   reward, for the once-per-pair rule. Rewards from the old bot's log are
+//   here and in `events` and the histories, but not in `recorded`.
 // - `recorded` (hash): comment id to the reward that command recorded.
 // - `events` (sorted set): every reward as JSON, scored by its time.
 // - `history:<username>` (sorted set): the rewards a user gave or received.
 // - `given:<giver>:<YYYY-MM-DD>`: rewards given that UTC day, for the cap.
 // - `answered:<commentId>`: the claim of a command comment.
 // - `deleting` (hash): the placeholder of each profile deletion in progress.
-// - `import:progress` and `meta:<key>`: the state of the import.
 
 import { DAY_MS } from './time';
 import {
@@ -91,7 +91,6 @@ const RECORDED = 'recorded';
 const EVENTS = 'events';
 /** The placeholder of each profile deletion in progress, so a deletion that failed resumes with the same one. */
 const DELETING = 'deleting';
-const IMPORT_PROGRESS = 'import:progress';
 
 const ANSWERED_TTL_MS = 365 * DAY_MS;
 const GIVEN_TTL_SECONDS = 2 * 24 * 60 * 60;
@@ -101,9 +100,7 @@ const DONE = 'done';
 export const IN_FLIGHT_MS = 45 * 1000;
 /** Attempts at a transaction before giving up: each is lost only to another reward landing at the same moment. */
 const TX_ATTEMPTS = 4;
-/** Members per `zRange` call by score: the ceiling the client sets. */
-const PAGE = 1000;
-/** Sorted sets written at once, in an import or a deletion. */
+/** Sorted sets written at once in a deletion. */
 const PARALLEL = 25;
 /** Fields or members per call when a deletion changes many. */
 const CHUNK = 500;
@@ -348,26 +345,6 @@ export class Store {
     return parseInteger(await this.redis.get(givenKey(giver, dayKey)));
   }
 
-  /** Sets a day's count outright (after an import that carries today's rewards). */
-  async setGivenToday(
-    giver: string,
-    dayKey: string,
-    count: number
-  ): Promise<void> {
-    await this.redis.set(givenKey(giver, dayKey), String(count), {
-      expiration: new Date(this.now() + GIVEN_TTL_SECONDS * 1000),
-    });
-  }
-
-  /** Small values kept between requests, such as the import's source. */
-  async meta(key: string): Promise<string | undefined> {
-    return this.redis.get(`meta:${key}`);
-  }
-
-  async setMeta(key: string, value: string): Promise<void> {
-    await this.redis.set(`meta:${key}`, value);
-  }
-
   /** The reward a command comment recorded, if it recorded one in this app. */
   async recordedReward(commentId: string): Promise<Reward | undefined> {
     const stored = await this.redis.hGet(RECORDED, commentId);
@@ -438,7 +415,7 @@ export class Store {
       this.redis.hGet(RECORDED, reward.commentId),
       this.redis.hGet(REWARDS, field),
     ]);
-    // An imported reward is in the pair index only.
+    // A reward from the old bot's log is in the pair index only.
     if (recorded !== undefined || pair === reward.commentId)
       return { kind: 'already-recorded' };
     if (!options.enforceLimits) return undefined;
@@ -446,86 +423,5 @@ export class Store {
       return { kind: 'already-rewarded', earlierCommentId: pair };
     const count = parseInteger(await this.redis.get(given));
     return count >= options.dailyCap ? { kind: 'cap' } : undefined;
-  }
-
-  /**
-   * Rewards from the given time on, oldest first, at most `limit`. A range by
-   * score returns at most a page per call, so this reads page after page.
-   */
-  async eventsSince(sinceMs: number, limit: number): Promise<ImportedReward[]> {
-    const rewards: ImportedReward[] = [];
-    while (rewards.length < limit) {
-      const count = Math.min(PAGE, limit - rewards.length);
-      const rows = await this.redis.zRange(EVENTS, sinceMs, '+inf', {
-        by: 'score',
-        limit: { offset: rewards.length, count },
-      });
-      rewards.push(...rows.map((row) => parseReward(row.member)));
-      if (rows.length < count) break;
-    }
-    return rewards;
-  }
-
-  async importProgress(): Promise<{ rows: number; done: boolean }> {
-    const stored = await this.redis.get(IMPORT_PROGRESS);
-    if (stored === undefined) return { rows: 0, done: false };
-    return JSON.parse(stored) as { rows: number; done: boolean };
-  }
-
-  async setImportProgress(progress: {
-    rows: number;
-    done: boolean;
-  }): Promise<void> {
-    await this.redis.set(
-      IMPORT_PROGRESS,
-      JSON.stringify({ rows: progress.rows, done: progress.done })
-    );
-  }
-
-  /**
-   * Loads one batch of imported profiles (karma included) and rewards. Every
-   * write overwrites the same field or member, so repeating a batch changes
-   * nothing.
-   */
-  async importBatch(batch: {
-    profiles: Profile[];
-    rewards: ImportedReward[];
-  }): Promise<void> {
-    if (batch.profiles.length > 0) {
-      const profiles: Record<string, string> = {};
-      const karma: Record<string, string> = {};
-      for (const profile of batch.profiles) {
-        const key = userKey(profile.redditUsername);
-        profiles[key] = profileJson(profile);
-        karma[key] = String(profile.karma);
-      }
-      await this.redis.hSet(PROFILES, profiles);
-      await this.redis.hSet(KARMA, karma);
-    }
-
-    if (batch.rewards.length === 0) return;
-    const fields: Record<string, string> = {};
-    const events: ZMember[] = [];
-    const histories = new Map<string, ZMember[]>();
-    const addHistory = (username: string, member: ZMember) => {
-      const key = historyKey(username);
-      const members = histories.get(key);
-      if (members === undefined) histories.set(key, [member]);
-      else members.push(member);
-    };
-    for (const reward of batch.rewards) {
-      fields[rewardField(reward.postId, reward.giver, reward.receiver)] =
-        reward.commentId;
-      events.push({ member: rewardJson(reward), score: reward.atMs });
-      const member = historyMember(reward);
-      addHistory(reward.giver, member);
-      if (userKey(reward.giver) !== userKey(reward.receiver))
-        addHistory(reward.receiver, member);
-    }
-    await this.redis.hSet(REWARDS, fields);
-    await this.redis.zAdd(EVENTS, ...events);
-    await inGroups([...histories], PARALLEL, ([key, members]) =>
-      this.redis.zAdd(key, ...members)
-    );
   }
 }

@@ -152,12 +152,6 @@ export interface RedditPort {
   isModerator(username: string): Promise<boolean>;
   /** The page's markdown, or undefined when it does not exist. Any other failure throws. */
   readWikiPage(page: string): Promise<string | undefined>;
-  /** Writes a page only moderators can see. Returns false when the page was written but could not be restricted. */
-  writeModWikiPage(
-    page: string,
-    content: string,
-    reason: string
-  ): Promise<boolean>;
   /** Posts a distinguished, locked reply. */
   replyLocked(target: ReplyTarget, text: string): Promise<void>;
   setUserFlair(

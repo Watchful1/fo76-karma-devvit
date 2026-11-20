@@ -7,8 +7,6 @@ import { withRateLimitRetry } from '../rate-limit';
 import type { CommentInfo, PostInfo, RedditPort, ReplyTarget } from '../types';
 
 const DELETED = '[deleted]';
-/** WikiPagePermissionLevel.MODS_ONLY: only moderators may view and edit the page. */
-const MODS_ONLY = 2;
 
 function authorOf(name: string | undefined): string | undefined {
   return !name || name === DELETED ? undefined : name;
@@ -94,28 +92,6 @@ export const devvitReddit: RedditPort = {
       // The subreddit may not have the new wiki at all: the page is missing either way.
       console.log(`Wiki page ${page} is in neither wiki: ${String(error)}`);
       return undefined;
-    }
-  },
-
-  async writeModWikiPage(
-    page: string,
-    content: string,
-    reason: string
-  ): Promise<boolean> {
-    const subredditName = context.subredditName;
-    // Updating a page that does not exist creates it.
-    await reddit.updateWikiPage({ subredditName, page, content, reason });
-    try {
-      await reddit.updateWikiPageSettings({
-        subredditName,
-        page,
-        listed: false,
-        permLevel: MODS_ONLY,
-      });
-      return true;
-    } catch (error) {
-      console.error(`Could not restrict wiki page ${page}: ${String(error)}`);
-      return false;
     }
   },
 

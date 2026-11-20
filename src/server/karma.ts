@@ -192,7 +192,7 @@ async function giveKarma(
   const recorded = await recordedBy(kind, run, parentAuthorName);
   if (recorded) {
     return afterReward(run, recorded.receiver, recorded.sign, {
-      reply: !run.answeredBefore && !recorded.imported,
+      reply: !run.answeredBefore && !recorded.fromOldBot,
     });
   }
 
@@ -263,21 +263,23 @@ async function giveKarma(
 
 /**
  * The reward this command recorded on an earlier attempt, if it did. A reward
- * imported from the old bot's log is in the once-per-pair index only, and the
- * old bot answered it.
+ * from the old bot's log is in the once-per-pair index only, and the old bot
+ * answered it.
  */
 async function recordedBy(
   kind: 'give' | 'take',
   run: Run,
   parentAuthorName: string | undefined
-): Promise<{ receiver: string; sign: 1 | -1; imported: boolean } | undefined> {
+): Promise<
+  { receiver: string; sign: 1 | -1; fromOldBot: boolean } | undefined
+> {
   const { comment, author, post, ports } = run;
   const recorded = await ports.store.recordedReward(comment.id);
   if (recorded)
     return {
       receiver: recorded.receiver,
       sign: recorded.sign,
-      imported: false,
+      fromOldBot: false,
     };
   if (!parentAuthorName) return undefined;
   const earlier = await ports.store.earlierReward(
@@ -289,7 +291,7 @@ async function recordedBy(
     ? {
         receiver: parentAuthorName,
         sign: kind === 'take' ? -1 : 1,
-        imported: true,
+        fromOldBot: true,
       }
     : undefined;
 }

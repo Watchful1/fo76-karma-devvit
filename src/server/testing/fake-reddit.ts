@@ -107,12 +107,6 @@ export class FakeReddit implements RedditPort {
     return this.wiki.get(page);
   }
 
-  async writeModWikiPage(page: string, content: string): Promise<boolean> {
-    this.called('writeModWikiPage');
-    this.wiki.set(page, content);
-    return true;
-  }
-
   async replyLocked(target: ReplyTarget, text: string): Promise<void> {
     this.called('replyLocked');
     if (this.failingReplyTargets.delete(target.id))

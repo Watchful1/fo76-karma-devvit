@@ -9,13 +9,6 @@
     "onCommentCreate": "/internal/triggers/on-comment-create",
     "onModAction": "/internal/triggers/on-mod-action"
   },
-  "scheduler": {
-    "tasks": {
-      "import-hop": {
-        "endpoint": "/internal/scheduler/import-hop"
-      }
-    }
-  },
   "menu": {
     "items": [
       {
@@ -45,29 +38,13 @@
         "location": "subreddit",
         "forUserType": "moderator",
         "endpoint": "/internal/menu/lookup"
-      },
-      {
-        "label": "Export karma rewards",
-        "description": "Write every reward since a date to a wiki page.",
-        "location": "subreddit",
-        "forUserType": "moderator",
-        "endpoint": "/internal/menu/export"
-      },
-      {
-        "label": "Import karma data",
-        "description": "Load the bundled snapshot, or a delta from a wiki page. Only while the bot is disabled.",
-        "location": "subreddit",
-        "forUserType": "moderator",
-        "endpoint": "/internal/menu/import"
       }
     ]
   },
   "forms": {
     "profileView": "/internal/forms/profile-view",
     "profileEdit": "/internal/forms/profile-edit",
-    "lookup": "/internal/forms/lookup",
-    "exportSince": "/internal/forms/export-since",
-    "importData": "/internal/forms/import-data"
+    "lookup": "/internal/forms/lookup"
   },
   "settings": {
     "subreddit": {

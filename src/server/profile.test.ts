@@ -3,6 +3,7 @@ import { test } from 'node:test';
 
 import { editProfile, profileView } from './profile';
 import { DAY, T0, testPorts } from './testing/ports';
+import { seedProfile } from './testing/seed';
 import type { Profile } from './types';
 
 const BOB: Profile = {
@@ -15,7 +16,7 @@ const BOB: Profile = {
 /** Bob's profile, and the values of his edit form as it was opened. */
 async function setup() {
   const t = testPorts();
-  await t.store.importBatch({ profiles: [BOB], rewards: [] });
+  await seedProfile(t.redis, BOB);
   const view = await profileView(t.store, 'bob', true);
   assert.ok(view.showForm);
   const values: Record<string, unknown> = Object.fromEntries(

@@ -5,6 +5,7 @@ import type { CommandSource } from './commands';
 import { handleCommand, type Outcome } from './karma';
 import { IN_FLIGHT_MS } from './store';
 import { DAY, T0, TEST_CONFIG, testPorts } from './testing/ports';
+import { seedGivenToday, seedOldReward, seedProfile } from './testing/seed';
 import type { CommentInfo, Config, PostInfo } from './types';
 
 const CAP = TEST_CONFIG.dailyCap;
@@ -299,7 +300,7 @@ const refusals: RefusalCase[] = [
     reason: 'cap',
     expectText: 'karma reward limit',
     arrange: async (s) => {
-      await s.store.setGivenToday('OP', DAY, CAP);
+      await seedGivenToday(s.redis, 'OP', DAY, CAP);
       return opRewards(s);
     },
   },
@@ -371,7 +372,7 @@ test('-karma by a moderator takes a point', async () => {
 test('a moderator is not held to the daily cap', async () => {
   for (const count of [CAP, CAP + 5]) {
     const s = setup();
-    await s.store.setGivenToday('Mod', DAY, count);
+    await seedGivenToday(s.redis, 'Mod', DAY, count);
     assert.equal(await s.run(modCommands(s)), 'rewarded', String(count));
     assert.equal(s.problems().length, 0);
     assert.equal(await s.store.givenToday('Mod', DAY), count + 1);
@@ -543,7 +544,7 @@ test('a moderator rerun picks up a failed command at once, and a second rerun ad
 
 test('the resumed reward that reached the cap replies with success, not the cap refusal', async () => {
   const s = setup();
-  await s.store.setGivenToday('OP', DAY, CAP - 1);
+  await seedGivenToday(s.redis, 'OP', DAY, CAP - 1);
   const id = opRewards(s);
   const restore = s.reddit.failUntilRestored('replyLocked');
   assert.equal(await s.run(id), 'failed');
@@ -562,7 +563,7 @@ test('the resumed reward that reached the cap replies with success, not the cap 
 
 test('the reward that reaches the cap is given, and a rerun of it is still rewarded', async () => {
   const s = setup();
-  await s.store.setGivenToday('OP', DAY, CAP - 1);
+  await seedGivenToday(s.redis, 'OP', DAY, CAP - 1);
   const id = opRewards(s);
 
   assert.equal(await s.run(id), 'rewarded');
@@ -609,7 +610,7 @@ test('two commands at once from a giver one below the cap give one point and one
     parentId: 't3_p2',
     postId: 't3_p2',
   });
-  await s.store.setGivenToday('OP', DAY, CAP - 1);
+  await seedGivenToday(s.redis, 'OP', DAY, CAP - 1);
   const first = opRewards(s, 't1_cmd1');
   const second = s.command('t1_cmd2', 'OP', '+karma', {
     parentId: 't1_c2',
@@ -657,20 +658,19 @@ test('a rerun of a finished refusal is judged and replied to again', async () =>
 test('a rerun of a command the old bot already rewarded gives no point and no reply', async () => {
   const s = setup();
   const id = opRewards(s, 't1_old');
-  await s.store.importBatch({
-    profiles: [
-      { redditUsername: 'Trader', karma: 7, m76Karma: 0, gamertags: [] },
-    ],
-    rewards: [
-      {
-        commentId: id,
-        postId: 't3_p1',
-        giver: 'OP',
-        receiver: 'Trader',
-        sign: 0,
-        atMs: T0 - 1000,
-      },
-    ],
+  await seedProfile(s.redis, {
+    redditUsername: 'Trader',
+    karma: 7,
+    m76Karma: 0,
+    gamertags: [],
+  });
+  await seedOldReward(s.redis, {
+    commentId: id,
+    postId: 't3_p1',
+    giver: 'OP',
+    receiver: 'Trader',
+    sign: 0,
+    atMs: T0 - 1000,
   });
 
   assert.equal(await s.run(id, 'rerun'), 'rewarded');

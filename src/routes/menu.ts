@@ -2,14 +2,12 @@ import { Hono } from 'hono';
 import type { Context } from 'hono';
 import type { MenuItemRequest, UiResponse } from '@devvit/web/shared';
 
-import { config, ports, store } from '../server/devvit/platform';
+import { ports, store } from '../server/devvit/platform';
 import { devvitReddit } from '../server/devvit/reddit';
 import { isCommentId } from '../server/ids';
-import { importStatus, importStatusText } from '../server/import';
 import { handleCommand, type CommandResult } from '../server/karma';
 import { profileView } from '../server/profile';
-import { DAY_MS, utcDayKey } from '../server/time';
-import { exportForm, importForm, lookupForm, toast } from '../server/ui';
+import { lookupForm, toast } from '../server/ui';
 import { forEveryone, forModerators } from './guard';
 
 export const menu = new Hono();
@@ -84,25 +82,4 @@ menu.post(
   forModerators(async () => ({
     showForm: { name: 'lookup', form: lookupForm() },
   }))
-);
-
-menu.post(
-  '/export',
-  forModerators(async () => {
-    const since = utcDayKey(Date.now() - 30 * DAY_MS);
-    return { showForm: { name: 'exportSince', form: exportForm(since) } };
-  })
-);
-
-menu.post(
-  '/import',
-  forModerators(async () => {
-    if ((await config()).enabled)
-      return toast('Turn Enabled off in the app settings before importing.');
-    const status = importStatusText(await importStatus(store()), Date.now());
-    const page = `karma-delta-${utcDayKey(Date.now())}`;
-    return {
-      showForm: { name: 'importData', form: importForm(page, status) },
-    };
-  })
 );

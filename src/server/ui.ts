@@ -5,12 +5,7 @@
 
 import type { Form, FormField, UiResponse } from '@devvit/web/shared';
 
-import {
-  PLATFORMS,
-  type ImportedReward,
-  type Profile,
-  type RedditPort,
-} from './types';
+import { PLATFORMS, type Profile, type RedditPort } from './types';
 
 /** The largest karma a moderator can type, so a slip of the keyboard is refused. */
 export const KARMA_LIMIT = 1_000_000;
@@ -230,99 +225,6 @@ export function lookupForm(): Form {
           { label: 'Karma profile', value: 'profile' },
           { label: 'Edit karma profile', value: 'edit' },
         ],
-      },
-    ],
-  };
-}
-
-/** The address of a page in the old wiki, where the app writes, on old Reddit: reddit.com shows only the new wiki. */
-export function wikiPageUrl(subredditName: string, page: string): string {
-  const path = page.split('/').map(encodeURIComponent).join('/');
-  return `https://old.reddit.com/r/${encodeURIComponent(subredditName)}/wiki/${path}`;
-}
-
-export function exportForm(defaultSince: string): Form {
-  return {
-    title: 'Export karma rewards',
-    description:
-      'Writes the rewards since the time to a wiki page named karma-export/<time>, which only moderators can see, and opens it on old.reddit.com.',
-    acceptLabel: 'Export',
-    fields: [
-      {
-        type: 'string',
-        name: 'since',
-        label: 'Since (YYYY-MM-DD or a full ISO time, UTC)',
-        defaultValue: defaultSince,
-        required: true,
-      },
-    ],
-  };
-}
-
-/** `+1`, `-1`, or `±1` for a reward from the old log, which did not record the sign. */
-function signText(sign: 1 | -1 | 0): string {
-  return sign === 0 ? '±1' : sign > 0 ? '+1' : '-1';
-}
-
-/**
- * The wiki text of an export: a header and one line per reward, as a code
- * block. At most `limit` rewards are written; when there are more, the header
- * gives the time to export from next.
- */
-export function exportText(
-  rewards: ImportedReward[],
-  sinceMs: number,
-  limit: number
-): { text: string; shown: number; truncated: boolean } {
-  const shown = rewards.slice(0, limit);
-  const next = rewards[limit];
-  const header = next
-    ? `The first ${shown.length} rewards since ${new Date(sinceMs).toISOString()}. There are more: export again since ${new Date(next.atMs).toISOString()}.`
-    : `All ${shown.length} rewards since ${new Date(sinceMs).toISOString()}.`;
-  const lines = [
-    header,
-    '',
-    '    time | sign | giver | receiver | post | comment',
-    ...shown.map(
-      (reward) =>
-        `    ${new Date(reward.atMs).toISOString()} | ${signText(reward.sign)} | ${reward.giver} | ${reward.receiver} | ${reward.postId} | ${reward.commentId}`
-    ),
-  ];
-  return {
-    text: lines.join('\n'),
-    shown: shown.length,
-    truncated: next !== undefined,
-  };
-}
-
-export function importForm(defaultPage: string, status: string): Form {
-  return {
-    title: 'Import karma data',
-    description: `${status} An import loads the snapshot bundled in this version, or a delta from a wiki page, in the background. It overwrites the karma of every user in the file with the file's value.`,
-    acceptLabel: 'Start import',
-    fields: [
-      {
-        type: 'select',
-        name: 'source',
-        label: 'Source',
-        defaultValue: ['bundled'],
-        options: [
-          { label: 'Bundled snapshot', value: 'bundled' },
-          { label: 'Wiki page (delta)', value: 'wiki' },
-        ],
-      },
-      {
-        type: 'string',
-        name: 'page',
-        label: 'Wiki page name, for a delta',
-        defaultValue: defaultPage,
-      },
-      {
-        type: 'boolean',
-        name: 'again',
-        label:
-          'Run it again even if this source already finished (overwrites karma given since)',
-        defaultValue: false,
       },
     ],
   };

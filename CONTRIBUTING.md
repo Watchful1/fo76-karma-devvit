@@ -19,14 +19,13 @@ in-memory fakes of Reddit and Redis, so they need no login or network.
 
 ## Layout
 
-| Path                  | Holds                                                                           |
-| --------------------- | ------------------------------------------------------------------------------- |
-| `devvit.json`         | The app definition: triggers, menu items, forms, settings, permissions          |
-| `src/routes/`         | The endpoints Reddit calls: triggers, menu items, forms, the import job         |
-| `src/server/`         | The logic: commands, checks, flair, replies, storage, import                    |
-| `src/server/devvit/`  | The real Reddit and Redis clients behind the interfaces the logic uses          |
-| `src/server/testing/` | The fakes the tests use                                                         |
-| `scripts/`            | `compact-export.mjs`, which turns the old bot's database export into a snapshot |
+| Path                  | Holds                                                                  |
+| --------------------- | ---------------------------------------------------------------------- |
+| `devvit.json`         | The app definition: triggers, menu items, forms, settings, permissions |
+| `src/routes/`         | The endpoints Reddit calls: triggers, menu items, forms                |
+| `src/server/`         | The logic: commands, checks, flair, replies, profiles, storage         |
+| `src/server/devvit/`  | The real Reddit and Redis clients behind the interfaces the logic uses |
+| `src/server/testing/` | The fakes the tests use                                                |
 
 Settings have their defaults in two places, `devvit.json` and
 `src/server/settings.ts`. A test fails if they differ.
@@ -69,10 +68,3 @@ karma data. Updating a version keeps it.
 `npm run logs` streams the app's log on r/Fallout76Marketplace. Every command
 it answers is a line like `t1_abc123 (create): rewarded`, and every failure
 starts with the comment id and says what failed.
-
-## The karma data
-
-The old bot's karma was moved in once, from a snapshot bundled into the app.
-`src/server/data/snapshot.json` is tracked only as an empty placeholder: the
-real file holds usernames and gamertags and must never be committed. CI fails
-if the placeholder is changed.

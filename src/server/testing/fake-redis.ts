@@ -1,5 +1,5 @@
 // An in-memory stand-in for the Devvit Redis client: what the store uses, and
-// two readers for tests.
+// readers for tests.
 
 import type { RedisPort, RedisTxPort } from '../store';
 import type { ImportedReward } from '../types';
@@ -235,6 +235,12 @@ export async function historyOf(
   const rows = await redis.zRange(`history:${username.toLowerCase()}`, 0, -1, {
     by: 'rank',
   });
+  return rows.map((row) => JSON.parse(row.member) as ImportedReward);
+}
+
+/** Every reward in the store's `events` key, oldest first. */
+export async function eventsOf(redis: FakeRedis): Promise<ImportedReward[]> {
+  const rows = await redis.zRange('events', 0, -1, { by: 'rank' });
   return rows.map((row) => JSON.parse(row.member) as ImportedReward);
 }
 

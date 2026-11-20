@@ -80,8 +80,6 @@ Both are read once per command.
 | **Edit karma profile**   | moderators | post, comment | Edits the author's karma, Market76 karma, gamertags and gamertag ids, and rebuilds the flair. A reward given while the form is open is kept                       |
 | **Karma lookup**         | moderators | subreddit     | Opens either profile item for a username, for a user whose posts are gone                                                                                         |
 | **Re-run karma command** | moderators | comment       | Runs a comment's command again, even while **Enabled** is off. A reward already on record is not given twice; the flair is rebuilt. Repairs a lost flair or reply |
-| **Export karma rewards** | moderators | subreddit     | Writes the rewards since a date to a wiki page only moderators can see, 2,000 to a page                                                                           |
-| **Import karma data**    | moderators | subreddit     | Loads the bundled snapshot, or a smaller file from a wiki page, in the background. Only while **Enabled** is off                                                  |
 
 Every moderator item checks on the server that the user is a moderator.
 
@@ -93,13 +91,10 @@ placeholder such as `[deleted-4f2a9c1e]`, so their trades still count.
 ## Logs
 
 The app's log (`npm run logs`) has a line for every command answered, every
-moderator edit, every failure, and each step of an import.
+moderator edit and every failure.
 
-## Import
+## History
 
-The old bot's karma was moved in once, from a snapshot that
-`scripts/compact-export.mjs` builds from its database export and that is
-bundled into one release. The import loads it in batches through a scheduler
-job, resumes where it stopped after a failure, and overwrites each imported
-user's karma, Market76 karma and gamertags. A smaller file of changes since the
-snapshot can be loaded the same way from a wiki page.
+The karma of the previous bot was imported once, in November 2026. Its rewards
+are known only by the once-per-pair record, so a re-run of a command the old
+bot answered gives no second point.
